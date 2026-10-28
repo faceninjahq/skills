@@ -31,14 +31,12 @@ https://faceninja.net/docs/#test-mode
 
 Statuses: `queued` (waiting in line; `queue.position`, `queue.eta_s`) → `processing` (`progress` 0–100; `stage` and `message`
 for display: `preparing`, `building`, `finishing`) → `completed` or `failed` (`error.code`, `error.message`; the credits are
-returned). `DELETE /v1/heads/{id}` before it finishes also returns the credits (a fictional head whose portrait was
-delivered keeps one 200-credit fee).
+returned). `DELETE /v1/heads/{id}` before it finishes also returns the credits.
 
 Holds that need a person: `needs_review` (every head made from uploaded photos, before 3D work) and `needs_licence` (a
 likely public figure), both with stage `licence_review` and a `review` object (`required`: `staff` or `licence`,
 `expires_at`). Review usually takes 1–2 business days, then the head goes back to `queued` and builds in 10–20 minutes.
 `?wait` returns at once on a hold and no webhook fires: stop polling and send the user to the Factory link.
-`awaiting_portrait` (stage `portrait_review`) is a fictional head waiting for its portrait to be accepted.
 
 Formats for `files`: `glb`, `fbx` (both with `arkit: true|false`), `obj`, `stl`, `ply`, `metahuman_zip`. Optional download
 options: `texture` (jpg|png|none), `normal_map` (opengl|directx), `texture_size` (4k|2k|1k), `cornea`, `scale` (standard life size | measured); a new
@@ -59,12 +57,6 @@ attestation_required` (with `docs_url`), nothing is created. Ask the user; never
 or as `rights_and_consent=true` and `adult=true`. `POST /v1/account/attestation {"attestation": {...}, "client": {"agent",
 "host", "version"}}` records that the user confirmed it on a computer. An account that has not accepted the current
 terms gets `403 terms_not_accepted`: the user accepts them once in Factory (https://faceninja.net/factory).
-
-Optional, only for a photo of an AI-generated person who does not exist: `"keep_for_improvement": true` with `"subject":
-"generated"` lets FaceNinja keep the photo and the build data for up to 3 years to improve its algorithms; it is never used
-to train AI models. Send it only when the user said the photo is AI-generated and agreed; never for a real person, never
-on your own. The head's `improvement` shows what became of it; `DELETE /v1/heads/{id}/improvement` withdraws it (what was
-kept is deleted). Without `subject: "generated"`: `400 subject_required`.
 
 ## Money
 
@@ -124,9 +116,6 @@ expires after 10 minutes.
 | `DELETE` | `/v1/photos/{id}` | Delete an unused photo |
 | `GET` | `/v1/heads` | List heads |
 | `POST` | `/v1/heads` | Create a head |
-| `GET` | `/v1/heads/{id}/portrait` | Get a checked portrait for customer review |
-| `POST` | `/v1/heads/{id}/portrait/accept` | Accept the reviewed portrait and queue its 3D build |
-| `POST` | `/v1/heads/{id}/portrait/redraw` | Use the next included portrait draw |
 | `GET` | `/v1/heads/{id}` | Read a head, optionally waiting |
 | `DELETE` | `/v1/heads/{id}` | Delete a head |
 | `DELETE` | `/v1/heads/{id}/photos` | Delete a head's photos now |

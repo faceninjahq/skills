@@ -1,9 +1,9 @@
 ---
 name: faceninja
-description: Turn photos or a selfie of a person into a 3D head on MetaHuman topology with FaceNinja (faceninja.net) - GLB or FBX with the 52 ARKit blendshapes, OBJ/STL/PLY, 4K skin textures and a MetaHuman ZIP for Unreal Engine. Use when the user wants a 3D head, avatar, digital double or MetaHuman from one or more photos, ARKit blendshapes for a real face, or a folder of portraits converted in a batch. Paid service (USD 15 per head), so state the cost and balance before spending.
+description: Turn photos or a selfie of a person into a 3D head on MetaHuman topology with FaceNinja (faceninja.net) - GLB or FBX with the 52 ARKit blendshapes, OBJ/STL/PLY, 4K skin textures and a MetaHuman ZIP for Unreal Engine. Use when the user wants a 3D head, avatar or MetaHuman of themselves or a consenting adult from one or more photos, ARKit blendshapes for a real face, or a folder of portraits converted in a batch. Paid service (USD 15 per head), so state the cost and balance before spending.
 license: MIT
 metadata:
-  version: "1.4.2"
+  version: "1.4.3"
   homepage: https://faceninja.net/agents
 ---
 
@@ -21,9 +21,6 @@ this folder into the agent's skills folder and prints where it went:
 - macOS / Linux: `curl -fsSL https://faceninja.net/skill/install.sh | sh` (add `-s -- --claude`, `--codex`, `--cursor` or
   `--agents` to pick the folder)
 - Windows PowerShell: `irm https://faceninja.net/skill/install.ps1 | iex`
-- Any agent, with the open skills installer: `npx skills add faceninjahq/skills` (add `-a <agent>` to pick one, for
-  example `-a claude-code`, `-a codex` or `-a cursor`; `-g` for every project).
-- Claude Code plugin: `claude plugin marketplace add faceninjahq/skills`, then `claude plugin install faceninja@faceninja`.
 - Script only: download https://faceninja.net/skill/faceninja.py and run `python3 faceninja.py`.
 
 If `FACENINJA_API_BASE` is set (a test server), use it instead of `https://faceninja.net` in these URLs; the script reads it too.
@@ -81,9 +78,6 @@ no, or the photos show a child or a public figure, stop. `make` and `batch` stop
 until this is done, and send the attestation with every head; the server refuses heads without it. In a terminal,
 the user can run `FN attest` and answer the question themselves.
 
-The CLI never sends `keep_for_improvement` (keeping a build of an AI-generated person, `reference/api.md`). If you call the
-API yourself, send it only when the user said the photo shows an AI-generated person and agreed to it; never assume it.
-
 If a head is refused with `terms_not_accepted` (exit 3), the account has not accepted the current terms: tell the user
 to open https://faceninja.net/factory, tick the box once, and then run the same command again.
 
@@ -101,8 +95,8 @@ count it in the cost you state. Never turn auto-reload on or raise its limits fo
 ### Free sample heads first
 
 Every account, even with 0 credits, can download 15 sample heads free: eight Real-life detail and seven Creator style
-(the API's `set` field is `realism` or `creator`). They are fictional people; GLB and FBX have the 52
-ARKit shapes, and each head includes a MetaHuman ZIP. Use them to try the user's pipeline before spending credits:
+(the API's `set` field is `realism` or `creator`). GLB and FBX have the 52 ARKit shapes, and each head includes a
+MetaHuman ZIP. Use them to try the user's pipeline before spending credits:
 `FN samples --json` lists them (no sign-in needed), `FN samples --download S-07 --out ./faceninja-samples --json` saves one
 (`all` for every sample; downloading needs an account). 30 sample files a day per account. Licence: free for personal and commercial use, no resale or redistribution
 of the files as they are (https://faceninja.net/samples/LICENSE.txt).
@@ -214,45 +208,11 @@ its `id`. Run the same `make` command again; it resumes that head and never char
 - API details for anything the script does not cover: `reference/api.md` (https://faceninja.net/skill/reference/api.md)
   and the full reference at https://faceninja.net/docs/.
 
+## Public figures and staff review
 
-## Fictional adults and NPC crowds (no photos)
-
-Use `make --describe "a weathered adult with freckles" --age 45`. It reserves **1,700 credits per head**, against
-1,500 for a photo head. `--count 3 --diversity '{"age_range":[25,65],"sexes":["man","woman"],"descents":["Korean","Nigerian","Irish"],"hair":["short","curly","long"]}'`
-creates separate heads; maximum 20. The usual volume bonus applies when buying credits. Structured JSON in `--describe`
-takes age (18–80), sex, descent, skin_tone, build, hair (style, length, colour, dye), facial_hair, glasses (default none),
-and look (300 characters). The corresponding flags are `--sex`, `--descent`, `--skin-tone`, `--build`, `--hair-style`,
-`--hair-length`, `--hair-colour`, `--hair-dye`, `--facial-hair`, `--glasses`.
-
-Before the first paid request, show the user the exact promise and ask them to confirm it:
-> These are generated people. I will not present them as real people or use them to impersonate anyone.
-
-Only after they confirm, add `--fictional-confirmed`. Above the normal batch threshold also confirm the total and add
-`--yes`. `--dry-run` quotes without drawing or reserving. Never supply consent or choose a portrait on the user's behalf.
-
-The description is screened before drawing; no real people or public figures, likeness requests, minors, nudity, hate or
-impersonation. The portrait then passes adult, one-face and content checks. The portrait is front-facing and evenly lit,
-with a neutral expression, hair clear of the face and no glasses. Requested hair, dye, facial hair, glasses and build go
-to the groom recipe.
-
-Up to **three portrait draws** are included per head. Show the returned portrait URL to the user (it expires; fetch
-again with `portrait HEAD`). They choose `portrait HEAD --accept --draw 1` or `portrait HEAD --redraw --draw 1`.
-Only acceptance starts the 3D build. Follow with `status HEAD --wait`, then `download HEAD --out DIR`.
-`portrait HEAD --cancel` abandons it. Before the build, a delivered checked portrait retains a **200-credit portrait fee**;
-the rest returns. Without a delivered checked portrait, or on a failed generation/build, all credits return.
-Review expires after **24 hours**, with the same cancellation fee. Repeating `make` in the same `--out` resumes the
-request, including a crowd; `--new` requests another.
-
-Generated portraits and build data are kept for up to three years for algorithm improvement, never model training.
-Tell the user before reserving. `--no-keep` opts out; later withdrawal uses `DELETE /v1/heads/HEAD/improvement` or Factory.
-Each head records the fictional promise and retention preference. A fictional build is generated material; account and
-consent records remain subject to the Privacy policy. See `/docs/#fictional` and the Content and Likeness Policy.
-
-### Public figures and staff review
-
-Every photo (including scan inputs) and every generated portrait is screened for public figures before 3D work, and on
+Every photo (including scan inputs) is screened for public figures before 3D work, and on
 faceninja.net every head made from uploaded photos is held for staff review: staff can clear it only after the user sends
-the form on the head's Factory page. Impersonation, deceptive deepfakes, sexual content of real people, harassment and political deception are refused.
+the form on the head's Factory page. Impersonation, deceptive fakes of real people, sexual content of real people, harassment and political deception are refused.
 Use only content the user owns or has rights to, with every depicted adult's consent. A public figure needs permission
 verified by staff. Send `public_figure: true` when the user identifies one. Never assert permission for the user.
 

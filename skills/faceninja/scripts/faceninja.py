@@ -51,9 +51,11 @@ import uuid
 import webbrowser
 from pathlib import Path
 
-__version__ = "1.4.2"   # 1.4.2: MIT licence (LICENSE file), more install routes (skills CLI, Claude Code plugin).
-                        # 1.4.0: fictional adults and NPC crowds from a description (make --describe, portrait review/accept/redraw/cancel,
-                        #        --no-keep); says "test mode" on the test environment (sandbox.faceninja.net); `samples` lists without signing in
+__version__ = "1.4.3"   # 1.4.3: wording only (likeness and refusal lines); no command or behaviour changed
+                        # 1.4.2: MIT licence (LICENSE file in the package; installers and updates carry it); help and docs cover
+                        #        heads from your own photos only (options for other head kinds stay, unlisted, for heads already made)
+                        # 1.4.1: refreshed photo review instructions and links; stop example polling loops on review holds.
+                        # 1.4.0: says "test mode" on the test environment (sandbox.faceninja.net); `samples` lists without signing in
                         # 1.3.0: the user's attestation for the photos, asked once per computer and sent with every head; `samples` (the
                         #        free sample heads); heads take 10 to 20 minutes (hints, waiting text), hints for greyscale and blurry photos;
                         # 1.2.0: updates itself, shows the server's guidance; 401 is exit 4 everywhere, downloads retry and resume,
@@ -944,7 +946,7 @@ def cmd_make(args, out):
     if args.describe is not None:
         return cmd_make_fictional(args, out)
     if not args.photos:
-        raise FNError("Send photos or --describe.", code="invalid_request", exit_code=EXIT_USAGE)
+        raise FNError("Give 1 to {} photos of the same person.".format(MAX_PHOTOS), code="invalid_request", exit_code=EXIT_USAGE)
     photos = check_photos(args.photos)
     formats = parse_formats(args.formats)
     out_dir = Path(args.out).expanduser().resolve()
@@ -1713,12 +1715,27 @@ def cmd_guidance(args, out):
 
 # ---- command line -----------------------------------------------------------------------------------------------------
 
+UNLISTED_COMMANDS = ("portrait",)
+
+
+class Unlisted(dict):
+    """The subcommands, where those named in `hidden` still run but are left out wherever argparse lists the commands
+    ("invalid choice ... choose from ..."). A subcommand added without help= has no line in --help already."""
+
+    def __init__(self, commands, hidden):
+        super().__init__(commands)
+        self.hidden = frozenset(hidden)
+
+    def __iter__(self):
+        return (k for k in super().__iter__() if k not in self.hidden)
+
+
 def main(argv=None):
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="one JSON object on stdout, progress on stderr")
     common.add_argument("--base", default=argparse.SUPPRESS, help="API server (default $FACENINJA_API_BASE or {})".format(DEFAULT_BASE))
 
-    ap = argparse.ArgumentParser(prog="faceninja.py", description="FaceNinja: photos or a description in, MetaHuman head out.", parents=[common])
+    ap = argparse.ArgumentParser(prog="faceninja.py", description="FaceNinja: your photos in, MetaHuman head out.", parents=[common])
     ap.add_argument("--version", action="version", version="faceninja.py " + __version__)
     sub = ap.add_subparsers(dest="cmd", metavar="COMMAND")
 
@@ -1746,30 +1763,30 @@ def main(argv=None):
         a.add_argument("--static", dest="arkit", action="store_false", help="GLB/FBX without blendshapes")
         p.add_argument("--dry-run", action="store_true", help="show the cost and balance, upload and spend nothing")
 
-    s = sub.add_parser("make", parents=[common], help="make heads from photos or describe fictional adults")
+    s = sub.add_parser("make", parents=[common], help="make heads from your photos",
+                       description="Make heads from your photos: 1 to {} photos of the same person make one head.".format(MAX_PHOTOS))
     s.add_argument("--public-figure", action="store_true", help="declare that the uploaded photos depict a public figure; staff verification is required")
-    s.add_argument("photos", nargs="*", metavar="PHOTO")
-    s.add_argument("--describe", help="fictional adult appearance text (300 characters) or a structured JSON object")
-    s.add_argument("--age", type=int, default=35, help="fictional age, 18-80 (default 35)")
-    s.add_argument("--count", type=int, default=1, help="fictional crowd size, 1-20")
-    s.add_argument("--diversity", help='JSON: age_range, sexes, descents, hair lists')
-    s.add_argument("--fictional-confirmed", action="store_true", help="the user explicitly confirmed the fictional-person attestation")
-    s.add_argument("--no-keep", action="store_true", help="opt out of retaining fictional build data for algorithm work")
-    s.add_argument("--yes", action="store_true", help="the user confirmed the crowd cost")
-    for key in ("sex", "descent", "skin_tone", "build", "facial_hair", "glasses", "hair_style", "hair_length", "hair_colour", "hair_dye"):
-        s.add_argument("--" + key.replace("_", "-"))
+    s.add_argument("photos", nargs="*", metavar="PHOTO", help="photos of one person (JPEG, PNG, WebP, HEIC, AVIF)")
+    # Unlisted (not in --help or the skill's docs since 1.4.2): options of a head kind the service no longer offers.
+    # They still parse, so a command started with an earlier version resumes.
+    for flag, kw in (("--describe", {}), ("--age", {"type": int, "default": 35}), ("--count", {"type": int, "default": 1}),
+                     ("--diversity", {}), ("--fictional-confirmed", {"action": "store_true"}), ("--no-keep", {"action": "store_true"}),
+                     ("--yes", {"action": "store_true"}), ("--sex", {}), ("--descent", {}), ("--skin-tone", {}), ("--build", {}),
+                     ("--facial-hair", {}), ("--glasses", {}), ("--hair-style", {}), ("--hair-length", {}), ("--hair-colour", {}),
+                     ("--hair-dye", {})):
+        s.add_argument(flag, help=argparse.SUPPRESS, **kw)
     s.add_argument("--name", help="a name for the head (default: the first photo's file name)")
     s.add_argument("--new", action="store_true", help="make a new head even if these photos already made one in --out")
     head_opts(s)
     s.set_defaults(fn=cmd_make)
 
-    s = sub.add_parser("portrait", parents=[common], help="review a fictional portrait, accept, redraw or cancel")
+    s = sub.add_parser("portrait", parents=[common])      # unlisted since 1.4.2 (see Unlisted below); kept for heads already made
     s.add_argument("id")
     a = s.add_mutually_exclusive_group()
-    a.add_argument("--accept", action="store_true", help="the user chose this portrait for the 3D build")
+    a.add_argument("--accept", action="store_true")
     a.add_argument("--redraw", action="store_true")
     a.add_argument("--cancel", action="store_true")
-    s.add_argument("--draw", type=int, help="the draw number reviewed by the user")
+    s.add_argument("--draw", type=int)
     s.set_defaults(fn=cmd_portrait)
 
     s = sub.add_parser("status", parents=[common], help="where a head stands")
@@ -1823,6 +1840,8 @@ def main(argv=None):
     g.add_argument("--confirmed-by-user", action="store_true",
                    help="the user read the text and said yes just now (an agent passes this only after asking the user; never on its own)")
     s.set_defaults(fn=cmd_attest)
+
+    sub.choices = Unlisted(sub.choices, UNLISTED_COMMANDS)
 
     global ARGV
     ARGV = list(sys.argv[1:] if argv is None else argv)

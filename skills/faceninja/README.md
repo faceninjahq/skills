@@ -22,12 +22,6 @@ curl -fsSL https://faceninja.net/skill/install.sh | sh -s -- --claude   # or --c
 irm https://faceninja.net/skill/install.ps1 | iex
 ```
 
-```sh
-npx skills add faceninjahq/skills                     # any agent; -a <agent> (claude-code, codex, cursor), -g for all projects
-claude plugin marketplace add faceninjahq/skills      # Claude Code plugin, then:
-claude plugin install faceninja@faceninja
-```
-
 Or unpack https://faceninja.net/skill/faceninja-skill.zip into your agent's skills folder
 (`~/.claude/skills/`, `~/.codex/skills/`, `.cursor/skills/`, `.agents/skills/`). The installers change nothing else.
 
