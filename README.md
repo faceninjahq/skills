@@ -31,8 +31,7 @@ claude plugin marketplace add faceninjahq/skills
 claude plugin install faceninja@faceninja
 ```
 
-**Cursor**: `npx skills add faceninjahq/skills -a cursor`, or install the FaceNinja plugin from the Cursor
-Marketplace once it is listed.
+**Cursor**: `npx skills add faceninjahq/skills -a cursor`.
 
 **Codex**: `npx skills add faceninjahq/skills -a codex` (installs to `.agents/skills/`, or `~/.agents/skills/` with `-g`).
 

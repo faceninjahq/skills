@@ -1,9 +1,9 @@
 ---
 name: faceninja
-description: Turn photos or a selfie of a person into a 3D head on MetaHuman topology with FaceNinja (faceninja.net) - GLB or FBX with the 52 ARKit blendshapes, OBJ/STL/PLY, 4K skin textures and a MetaHuman ZIP for Unreal Engine. Use when the user wants a 3D head, avatar or MetaHuman of themselves or a consenting adult from one or more photos, ARKit blendshapes for a real face, or a folder of portraits converted in a batch. Paid service (USD 15 per head), so state the cost and balance before spending.
+description: Turn photos or a selfie of a person into a 3D head on MetaHuman topology with FaceNinja (faceninja.net) - GLB or FBX with the 52 ARKit blendshapes, OBJ/STL/PLY, 4K skin textures and a MetaHuman ZIP for Unreal Engine. Use when the user wants a 3D head, avatar or MetaHuman of themselves or a consenting adult from one or more photos, ARKit blendshapes for a real face, or a folder of photos converted in a batch. Paid service (USD 15 per head), so state the cost and balance before spending.
 license: MIT
 metadata:
-  version: "1.4.3"
+  version: "1.4.4"
   homepage: https://faceninja.net/agents
 ---
 
@@ -22,6 +22,10 @@ this folder into the agent's skills folder and prints where it went:
   `--agents` to pick the folder)
 - Windows PowerShell: `irm https://faceninja.net/skill/install.ps1 | iex`
 - Script only: download https://faceninja.net/skill/faceninja.py and run `python3 faceninja.py`.
+- npx: `npx skills add faceninjahq/skills`
+- Claude Code: `claude plugin marketplace add faceninjahq/skills`, then `claude plugin install faceninja@faceninja`
+- Cursor: `npx skills add faceninjahq/skills -a cursor`.
+- Gemini CLI: `gemini extensions install https://github.com/faceninjahq/skills`
 
 If `FACENINJA_API_BASE` is set (a test server), use it instead of `https://faceninja.net` in these URLs; the script reads it too.
 To try FaceNinja without paying, use the test environment: `FACENINJA_API_BASE=https://sandbox.faceninja.net` (section 7).

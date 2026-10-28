@@ -51,9 +51,9 @@ import uuid
 import webbrowser
 from pathlib import Path
 
-__version__ = "1.4.3"   # 1.4.3: wording only (likeness and refusal lines); no command or behaviour changed
+__version__ = "1.4.4"   # 1.4.4: the removed head kind is gone from the script; old options answer one short error
                         # 1.4.2: MIT licence (LICENSE file in the package; installers and updates carry it); help and docs cover
-                        #        heads from your own photos only (options for other head kinds stay, unlisted, for heads already made)
+                        #        heads from your own photos only
                         # 1.4.1: refreshed photo review instructions and links; stop example polling loops on review holds.
                         # 1.4.0: says "test mode" on the test environment (sandbox.faceninja.net); `samples` lists without signing in
                         # 1.3.0: the user's attestation for the photos, asked once per computer and sent with every head; `samples` (the
@@ -717,7 +717,7 @@ def create_head(api, out, photos, name, public_figure=False):
     return head
 
 
-def describe(h):
+def head_line(h):
     q = h.get("queue") or {}
     bits = [h.get("status")]
     if h.get("stage"):
@@ -743,7 +743,7 @@ def wait_head(api, out, head_id, max_wait=0):
             raise FNError("Head {} is still running ({}).".format(head_id, last), code="still_running", exit_code=EXIT_PENDING,
                           hint="Run: python faceninja.py status {} --wait".format(head_id), data={"id": head_id})
         _, h, _ = api.call("GET", "/v1/heads/{}?wait={}".format(head_id, int(max(1, min(60, left)))), timeout=95)
-        d = describe(h)
+        d = head_line(h)
         if d != last:
             out.say("  {}  {}".format(time.strftime("%H:%M:%S"), d))
             last = d
@@ -850,101 +850,7 @@ def quote(api, out, count):
             "balance_after": credits - total, "sufficient": credits >= total}
 
 
-FICTIONAL_ATTESTATION = "These are generated people. I will not present them as real people or use them to impersonate anyone."
-
-
-def cmd_make_fictional(args, out):
-    if args.photos:
-        raise FNError("Use --describe without photos.", code="invalid_request", exit_code=EXIT_USAGE)
-    try:
-        description = json.loads(args.describe) if args.describe.lstrip().startswith("{") else {"age": args.age, "look": args.describe}
-        diversity = json.loads(args.diversity) if args.diversity else {}
-    except ValueError:
-        raise FNError("The structured description or diversity is not valid JSON.", code="invalid_request", exit_code=EXIT_USAGE)
-    for key in ("sex", "descent", "skin_tone", "build", "facial_hair", "glasses"):
-        value = getattr(args, key, None)
-        if value is not None:
-            description[key] = value
-    hair = {key: getattr(args, "hair_" + key) for key in ("style", "length", "colour", "dye") if getattr(args, "hair_" + key) is not None}
-    if hair:
-        description["hair"] = dict(description.get("hair") or {}, **hair)
-    payload = {"describe": description, "count": args.count, "diversity": diversity,
-               "attestation": {"fictional": True}, "keep_for_improvement": not args.no_keep,
-               "options": {"formats": parse_formats(args.formats), "arkit": args.arkit is not False}}
-    if args.name:
-        payload["name"] = args.name
-    api = api_for(args, out)
-    _, quote, _ = api.call("POST", "/v1/heads?dry_run", body=payload)
-    out.say("Fictional heads: {} credits reserved; {} draws per head included. Cancel before building: {} credits per delivered portrait retained; failures refund fully. Review expires after 24 hours.".format(
-        quote["credits"]["cost"], quote["draws"], quote["portrait_fee"]))
-    out.say("Build data is kept for algorithm improvement, never model training. --no-keep opts out; you may withdraw later.")
-    if args.dry_run:
-        return out.result({"ok": True, "dry_run": True, "quote": quote}, "Dry run: nothing generated or reserved.")
-    if not args.fictional_confirmed:
-        confirmed = False
-        if sys.stdin.isatty():
-            out.say(FICTIONAL_ATTESTATION)
-            confirmed = input("Confirm this promise? [y/N] ").strip().lower() in ("y", "yes")
-        if not confirmed:
-            raise FNError("Ask the user to confirm: " + FICTIONAL_ATTESTATION, code="attestation_required", exit_code=EXIT_CONFIRM,
-                          hint="After the user confirms, rerun with --fictional-confirmed. Never answer on their behalf.")
-    if args.count > confirm_above(args.base) and not args.yes:
-        raise FNError("Confirm the crowd cost with the user, then rerun with --yes.", code="confirmation_required", exit_code=EXIT_CONFIRM, data={"quote": quote})
-    out_dir = Path(args.out).expanduser().resolve()
-    state = load_state(out_dir)
-    fp = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-    records = state.setdefault("fictional", {})
-    record = records.get(fp) if not args.new else None
-    if record and record.get("heads"):
-        heads = [api.call("GET", "/v1/heads/" + h["id"])[1] for h in record["heads"]]
-    else:
-        record = record or {"key": "fictional-" + os.urandom(16).hex()}
-        records[fp] = record
-        save_state(out_dir, state)      # persist the retry key BEFORE sending a paid request
-        _, result, _ = api.call("POST", "/v1/heads", body=payload, headers={"Idempotency-Key": record["key"]})
-        heads = result["data"] if result.get("object") == "list" else [result]
-        record["heads"] = [{"id": h["id"]} for h in heads]
-        save_state(out_dir, state)
-    deadline = time.time() + args.max_wait if args.max_wait else None
-    while args.wait and any(h.get("fictional", {}).get("state") == "drawing" and h.get("status") not in FINAL for h in heads):
-        if deadline and time.time() > deadline:
-            return out.result({"ok": True, "heads": heads, "pending": True}, "Portraits are being prepared. Run this same command to resume.")
-        time.sleep(2)
-        heads = [api.call("GET", "/v1/heads/" + h["id"])[1] for h in heads]
-    held = [h for h in heads if h.get("status") in ("needs_licence", "needs_review")]
-    if held:
-        raise FNError("A fictional portrait requires staff permission review; no 3D build has started.",
-                      code="licence_review_required", exit_code=EXIT_PENDING,
-                      hint="Open {}/factory#/heads/{} to submit evidence. Never assert permission for the user.".format(api.base, held[0]["id"]),
-                      data={"heads": heads})
-    portraits = []
-    for h in heads:
-        if h.get("status") == "awaiting_portrait":
-            _, portrait, _ = api.call("GET", "/v1/heads/" + h["id"] + "/portrait")
-            portraits.append({"id": h["id"], **portrait})
-            out.say("{} draw {}: {}".format(h["id"], portrait["draw"], portrait["url"]))
-    return out.result({"ok": True, "heads": heads, "portraits": portraits, "quote": quote},
-        "Show each portrait to the user. Accept only their chosen draw with: portrait HEAD --accept --draw N. Redraw: --redraw. Abandon: --cancel.")
-
-
-def cmd_portrait(args, out):
-    api = api_for(args, out)
-    if args.cancel:
-        _, head, _ = api.call("DELETE", "/v1/heads/" + args.id)
-        return out.result({"ok": True, "head": head}, "Cancelled; the disclosed portrait fee applies if a checked portrait was delivered.")
-    action = "accept" if args.accept else "redraw" if args.redraw else None
-    if action:
-        if args.draw is None:
-            raise FNError("Give --draw N for the portrait the user reviewed.", code="invalid_request", exit_code=EXIT_USAGE)
-        _, head, _ = api.call("POST", "/v1/heads/{}/portrait/{}".format(args.id, action), body={"draw": args.draw})
-        return out.result({"ok": True, "head": head}, "Head {}: {}. Follow with status {} --wait.".format(args.id, action, args.id))
-    _, portrait, _ = api.call("GET", "/v1/heads/" + args.id + "/portrait")
-    out.result({"ok": True, "id": args.id, **portrait}, "Draw {}: {}".format(portrait["draw"], portrait["url"]))
-
-
 def cmd_make(args, out):
-    if args.describe is not None:
-        return cmd_make_fictional(args, out)
     if not args.photos:
         raise FNError("Give 1 to {} photos of the same person.".format(MAX_PHOTOS), code="invalid_request", exit_code=EXIT_USAGE)
     photos = check_photos(args.photos)
@@ -981,7 +887,7 @@ def cmd_make(args, out):
         head = create_head(api, out, photos, name, args.public_figure)
         state["heads"][fp] = {"id": head["id"], "name": name, "photos": [str(p) for p in photos], "created_at": head.get("created_at")}
         save_state(out_dir, state)
-        out.say("Created head {} ({}). {} credits held.".format(head["id"], describe(head), num(q["credits_per_head"])))
+        out.say("Created head {} ({}). {} credits held.".format(head["id"], head_line(head), num(q["credits_per_head"])))
     result = {"ok": True, "id": head["id"], "name": name, "status": head.get("status"), "quote": q, "out": str(out_dir)}
     if not args.wait:
         return out.result(dict(result, next="python faceninja.py status {} --wait".format(head["id"])),
@@ -1012,7 +918,7 @@ def cmd_status(args, out):
         _, h, _ = api.call("GET", "/v1/heads/{}".format(args.id))
     files = [f.get("format") + ("+arkit" if f.get("arkit") else "") for f in (h.get("files") or [])]
     out.result({"ok": True, "head": h},
-               "{} {}: {}{}".format(h["id"], "(" + h["name"] + ")" if h.get("name") else "", describe(h),
+               "{} {}: {}{}".format(h["id"], "(" + h["name"] + ")" if h.get("name") else "", head_line(h),
                                      "\nFiles: " + ", ".join(files) if files else "") +
                ("\nError: {} ({})".format((h.get("error") or {}).get("message"), (h.get("error") or {}).get("code")) if h.get("error") else ""))
     if args.wait and h.get("status") == "failed":
@@ -1148,9 +1054,9 @@ def cmd_batch(args, out):
             for hid in sorted(pending):
                 _, h, _ = api.call("GET", "/v1/heads/{}".format(hid))
                 r = results[hid]
-                if describe(h) != r.get("last"):
-                    out.say("  {}  {:<24} {}".format(time.strftime("%H:%M:%S"), r["name"][:24], describe(h)))
-                    r["last"] = describe(h)
+                if head_line(h) != r.get("last"):
+                    out.say("  {}  {:<24} {}".format(time.strftime("%H:%M:%S"), r["name"][:24], head_line(h)))
+                    r["last"] = head_line(h)
                 r["status"] = h.get("status")
                 if h.get("status") in FINAL:
                     pending.discard(hid)
@@ -1715,21 +1621,6 @@ def cmd_guidance(args, out):
 
 # ---- command line -----------------------------------------------------------------------------------------------------
 
-UNLISTED_COMMANDS = ("portrait",)
-
-
-class Unlisted(dict):
-    """The subcommands, where those named in `hidden` still run but are left out wherever argparse lists the commands
-    ("invalid choice ... choose from ..."). A subcommand added without help= has no line in --help already."""
-
-    def __init__(self, commands, hidden):
-        super().__init__(commands)
-        self.hidden = frozenset(hidden)
-
-    def __iter__(self):
-        return (k for k in super().__iter__() if k not in self.hidden)
-
-
 def main(argv=None):
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="one JSON object on stdout, progress on stderr")
@@ -1767,27 +1658,10 @@ def main(argv=None):
                        description="Make heads from your photos: 1 to {} photos of the same person make one head.".format(MAX_PHOTOS))
     s.add_argument("--public-figure", action="store_true", help="declare that the uploaded photos depict a public figure; staff verification is required")
     s.add_argument("photos", nargs="*", metavar="PHOTO", help="photos of one person (JPEG, PNG, WebP, HEIC, AVIF)")
-    # Unlisted (not in --help or the skill's docs since 1.4.2): options of a head kind the service no longer offers.
-    # They still parse, so a command started with an earlier version resumes.
-    for flag, kw in (("--describe", {}), ("--age", {"type": int, "default": 35}), ("--count", {"type": int, "default": 1}),
-                     ("--diversity", {}), ("--fictional-confirmed", {"action": "store_true"}), ("--no-keep", {"action": "store_true"}),
-                     ("--yes", {"action": "store_true"}), ("--sex", {}), ("--descent", {}), ("--skin-tone", {}), ("--build", {}),
-                     ("--facial-hair", {}), ("--glasses", {}), ("--hair-style", {}), ("--hair-length", {}), ("--hair-colour", {}),
-                     ("--hair-dye", {})):
-        s.add_argument(flag, help=argparse.SUPPRESS, **kw)
     s.add_argument("--name", help="a name for the head (default: the first photo's file name)")
     s.add_argument("--new", action="store_true", help="make a new head even if these photos already made one in --out")
     head_opts(s)
     s.set_defaults(fn=cmd_make)
-
-    s = sub.add_parser("portrait", parents=[common])      # unlisted since 1.4.2 (see Unlisted below); kept for heads already made
-    s.add_argument("id")
-    a = s.add_mutually_exclusive_group()
-    a.add_argument("--accept", action="store_true")
-    a.add_argument("--redraw", action="store_true")
-    a.add_argument("--cancel", action="store_true")
-    s.add_argument("--draw", type=int)
-    s.set_defaults(fn=cmd_portrait)
 
     s = sub.add_parser("status", parents=[common], help="where a head stands")
     s.add_argument("id")
@@ -1841,11 +1715,14 @@ def main(argv=None):
                    help="the user read the text and said yes just now (an agent passes this only after asking the user; never on its own)")
     s.set_defaults(fn=cmd_attest)
 
-    sub.choices = Unlisted(sub.choices, UNLISTED_COMMANDS)
-
     global ARGV
     ARGV = list(sys.argv[1:] if argv is None else argv)
-    args = ap.parse_args(argv)
+    args, extra = ap.parse_known_args(argv)
+    if extra and getattr(args, "cmd", None) == "make":
+        print("Error: Heads from a text description are no longer offered. FaceNinja makes heads from photos.", file=sys.stderr)
+        return EXIT_USAGE
+    if extra:
+        ap.error("unrecognized arguments: " + " ".join(extra))
     args.json = getattr(args, "json", False)
     args.base = norm_base(getattr(args, "base", None) or os.environ.get("FACENINJA_API_BASE"))
     out = Out(args.json)

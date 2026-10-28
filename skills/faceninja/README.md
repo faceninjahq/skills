@@ -22,6 +22,17 @@ curl -fsSL https://faceninja.net/skill/install.sh | sh -s -- --claude   # or --c
 irm https://faceninja.net/skill/install.ps1 | iex
 ```
 
+Or install from the GitHub repository https://github.com/faceninjahq/skills:
+
+```sh
+npx skills add faceninjahq/skills                                  # npx
+claude plugin marketplace add faceninjahq/skills                   # Claude Code
+claude plugin install faceninja@faceninja
+gemini extensions install https://github.com/faceninjahq/skills    # Gemini CLI
+```
+
+Cursor: `npx skills add faceninjahq/skills -a cursor`.
+
 Or unpack https://faceninja.net/skill/faceninja-skill.zip into your agent's skills folder
 (`~/.claude/skills/`, `~/.codex/skills/`, `.cursor/skills/`, `.agents/skills/`). The installers change nothing else.
 

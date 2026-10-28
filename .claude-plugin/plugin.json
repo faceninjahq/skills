@@ -1,7 +1,7 @@
 {
   "name": "faceninja",
   "displayName": "FaceNinja",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Turn a photo into a finished MetaHuman head from your AI agent: 52 ARKit blendshapes, 4K skin, GLB, FBX or a MetaHuman ZIP. Paid FaceNinja credits.",
   "author": {
     "name": "FaceNinja",
