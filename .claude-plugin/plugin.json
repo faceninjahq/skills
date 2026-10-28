@@ -1,0 +1,29 @@
+{
+  "name": "faceninja",
+  "displayName": "FaceNinja",
+  "version": "1.4.2",
+  "description": "Turn a photo into a finished MetaHuman head from your AI agent: 52 ARKit blendshapes, 4K skin, GLB, FBX or a MetaHuman ZIP. Paid FaceNinja credits.",
+  "author": {
+    "name": "FaceNinja",
+    "email": "support@faceninja.net",
+    "url": "https://faceninja.net/?utm_source=github&utm_medium=referral&utm_campaign=skill_repo"
+  },
+  "homepage": "https://faceninja.net/agents?utm_source=github&utm_medium=referral&utm_campaign=skill_repo",
+  "repository": "https://github.com/faceninjahq/skills",
+  "license": "MIT",
+  "keywords": [
+    "metahuman",
+    "3d-head",
+    "avatar",
+    "arkit",
+    "blendshapes",
+    "unreal-engine",
+    "glb",
+    "fbx",
+    "agent-skill"
+  ],
+  "icon": "./assets/logo.png",
+  "documentationUrl": "https://faceninja.net/docs/",
+  "privacyPolicyUrl": "https://faceninja.net/legal/privacy-policy",
+  "termsOfServiceUrl": "https://faceninja.net/legal/terms-of-service"
+}

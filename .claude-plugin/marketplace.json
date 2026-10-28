@@ -1,0 +1,26 @@
+{
+  "name": "faceninja",
+  "description": "FaceNinja plugins for Claude Code: photo to a finished MetaHuman head.",
+  "owner": {
+    "name": "FaceNinja",
+    "email": "support@faceninja.net"
+  },
+  "plugins": [
+    {
+      "name": "faceninja",
+      "source": "./",
+      "description": "Turn a photo into a finished MetaHuman head from your AI agent: 52 ARKit blendshapes, 4K skin, GLB, FBX or a MetaHuman ZIP. Paid FaceNinja credits.",
+      "license": "MIT",
+      "homepage": "https://faceninja.net/agents?utm_source=github&utm_medium=referral&utm_campaign=skill_repo",
+      "repository": "https://github.com/faceninjahq/skills",
+      "keywords": [
+        "metahuman",
+        "3d-head",
+        "avatar",
+        "arkit",
+        "unreal-engine"
+      ],
+      "category": "design"
+    }
+  ]
+}
