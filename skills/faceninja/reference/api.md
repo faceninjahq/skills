@@ -47,6 +47,26 @@ PLY and GLB/FBX without ARKit are made from the GLB the first time they are aske
 "eta_s"}` with `Retry-After`; ask again until you get the link (`faceninja.py download` does). The head's `downloads`
 array shows each format as `ready`, `preparing`, `on_request` or `expired`.
 
+## Scan (beta): 3D reconstruction from several photos
+
+`"options": {"scan_reconstruction": true}` (or `scan_reconstruction` at the top level) builds the head from **2 to 15
+photos** of one session. How to shoot: https://faceninja.net/photo-tips#scan. Same price.
+
+Options of a scan: `focal_length` (`"auto"`, the default; or a 35 mm-equivalent focal length in mm, 1 to 2000; or
+`{photo: mm}`, keyed by photo id, file name or 1-based position), `texture` (`pbr`, the default: evenly lit skin with
+PBR maps; `raw`: the skin as the photos show it), `cleanup` (`pbr` only; `false` keeps hair and stray marks on the
+skin). Without `scan_reconstruction` they are `400 field_not_applicable`, as are `groom` or `hair_preview` set to `true`
+with it. A scan head also has the files `cameras_json` and `cameras_gltf` (each photo's camera and focal length).
+
+The head's `scan`: `source` (`photos`), `photos` and `photos_used`, `cameras` (null until completed) and the **capture
+check** `capture` (null until the photos were analysed; also on failed heads): `quality` (`good`: no issue; `fair`: minor
+issues only; `poor`: a major issue, the head is built but a retake will be clearly more accurate), `source`, `issues`
+(most severe first: `code`, `severity` `major` or `minor`, `message` in English, `photos` concerned, measured `values`),
+`coverage` (`photos`, `photos_used`, `turn_span_deg`, `turn_one_side_deg`, `turn_other_side_deg`, `nod_span_deg`),
+`perspective` (`focal_length_35mm`, `distance_per_face_width`). Issue codes: `missing_side`, `too_little_turn`,
+`long_lens_flat`, `few_photos`, `blur`, `lighting_change`, `low_resolution`, `expression_change`, `few_matches`,
+`photo_not_used`, `inconsistent_photo`; a newer server may add others.
+
 ## Attestation and terms (required)
 
 Every `POST /v1/heads` carries `"attestation": {"rights_and_consent": true, "adult": true}`: the user who uploads the photos
@@ -68,9 +88,10 @@ from launch day; until launch, sign-up on faceninja.net is by invitation (suppor
 ## Errors and limits
 
 `{"error": {"code", "message", "field"?, "hint"?, "request_id"}}`; branch on `code`. A failed head's `error.code` is `no_face`,
-`multiple_people`, `not_same_person`, `unreadable_photo`, `greyscale_photo`, `blurry_photo`, `face_too_small`, `content_rejected`, `build_failed` or `timeout`; after a review hold also `licence_rejected` (staff could not verify permission), `review_expired` (14 days passed) or `licence_withdrawn` (the evidence was deleted before delivery). A `503 busy` on create means nothing was made or charged: try again in an hour. 600 requests a minute per account,
+`multiple_people`, `not_same_person`, `unreadable_photo`, `greyscale_photo`, `blurry_photo`, `face_too_small`, `content_rejected`, `build_failed` or `timeout`; a scan also `too_few_views` (fewer than 2 usable photos), `too_many_photos`, `reconstruction_failed` or `inconsistent_capture`; after a review hold also `licence_rejected` (staff could not verify permission), `review_expired` (14 days passed) or `licence_withdrawn` (the evidence was deleted before delivery). A `503 busy` on create means nothing was made or charged: try again in an hour. 600 requests a minute per account,
 30 head creations a minute, 20 file links a minute per head; `429` carries `Retry-After`. Photos: JPEG, PNG, WebP,
-HEIC/HEIF, AVIF, 1 KB to 25 MiB, 1 to 15 per head, one person, unused photos expire after 24 h.
+HEIC/HEIF, AVIF, 1 KB to 25 MiB, 1 to 15 per head, one person, unused photos expire after 24 h; a scan takes 2 to 15
+photos (section Scan).
 
 Retention (`retention` in the head): photos are deleted 7 days after the head finishes (`DELETE /v1/heads/{id}/photos`
 sooner); download files after 30 days; the master they are rebuilt from after 1 year. After 30 days a file request (or

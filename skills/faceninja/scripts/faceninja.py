@@ -6,9 +6,11 @@ Standard library only, Python 3.9+, Linux, macOS and Windows (`python faceninja.
   faceninja.py login [--no-wait]           sign in: approve a code in the browser, a new API key is saved
   faceninja.py whoami | balance            who is signed in, credits left (balance: and auto-reload)
   faceninja.py make PHOTO... [--name N] [--formats glb,zip] [--out DIR] [--no-wait] [--max-wait S]
+  faceninja.py make --scan PHOTO... [--focal-length auto|MM] [--texture pbr|raw] [--no-cleanup] ...
+                                           a scan (beta): 2 to 15 photos of one session
   faceninja.py status ID [--wait] [--max-wait S]
   faceninja.py download ID [--formats glb,fbx,zip] [--out DIR]
-  faceninja.py batch DIR [--per-person-subfolders] [--yes] ...
+  faceninja.py batch DIR [--per-person-subfolders] [--yes] ...   (photos only)
   faceninja.py list | logout
   faceninja.py update [--check | --rollback]  update the skill now (it also updates itself, at most hourly)
   faceninja.py guidance                     the server's current rules and notices for agents
@@ -51,7 +53,9 @@ import uuid
 import webbrowser
 from pathlib import Path
 
-__version__ = "1.4.4"   # 1.4.4: the removed head kind is gone from the script; old options answer one short error
+__version__ = "1.4.5"   # 1.4.5: make --scan: a scan (beta) from 2 to 15 photos of one session; prints the capture check of a
+                        #        scan head (a scan from one video follows the server's switch, prices.scan_video)
+                        # 1.4.4: the removed head kind is gone from the script; old options answer one short error
                         # 1.4.2: MIT licence (LICENSE file in the package; installers and updates carry it); help and docs cover
                         #        heads from your own photos only
                         # 1.4.1: refreshed photo review instructions and links; stop example polling loops on review holds.
@@ -69,6 +73,22 @@ FORMATS = {"glb": "glb", "fbx": "fbx", "obj": "obj", "stl": "stl", "ply": "ply",
 ALL_FORMATS = ["glb", "fbx", "obj", "stl", "ply", "metahuman_zip"]
 IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
                ".heic": "image/heic", ".heif": "image/heif", ".avif": "image/avif"}
+# a scan (scan_reconstruction): 2 to 15 photos of one session, or one video of a slow head turn
+SCAN_PHOTOS_MIN = 2
+VIDEO_TYPES = {".mp4": "video/mp4", ".mov": "video/quicktime", ".m4v": "video/x-m4v", ".webm": "video/webm", ".mkv": "video/x-matroska"}
+MAX_VIDEO_BYTES = 200 * 1024 * 1024
+FOCAL_MM = (1, 2000)        # --focal-length: a 35 mm-equivalent focal length in mm, as the API takes it
+SCAN_FLAGS = ("--scan", "--focal-length", "--texture", "--no-cleanup")
+SCAN_TIPS = "/photo-tips#scan"
+# A scan from one video: the published script keeps one line of each pair below, the first while FaceNinja offers scans
+# from a video, the second while it does not.
+# Whether a video is taken is the server's answer (prices.scan_video in /v1/account), asked before anything is sent.
+OR_VIDEO = ""
+SCAN_WHAT = "2 to 15 photos of one session"
+VIDEO_TYPES_TEXT = ""
+BATCH_SKIPPED = "Skipped {} file(s) that are not photos: batch makes heads from photos only."
+VIDEO_CLOSED = "Scans from a video are not available yet; make the scan from 2 to {} photos of one session with --scan."
+UPLOAD_TRIES = 3            # a video upload cut short is sent again from the start (its link lasts an hour)
 FINAL = ("completed", "failed", "deleted")
 STATE_FILE = ".faceninja.json"
 DOWNLOAD_TRIES = 3          # a download cut short is retried (and resumed) this many times, with a fresh link each time
@@ -104,6 +124,10 @@ class Out:
 
     def say(self, *parts):
         print(" ".join(str(p) for p in parts), file=sys.stderr if self.json else sys.stdout, flush=True)
+
+    def note(self, *parts):
+        """A line for the person or agent on stderr, also without --json (stdout keeps the command's own output)."""
+        print(" ".join(str(p) for p in parts), file=sys.stderr, flush=True)
 
     def result(self, data, human=None):
         if self.json:
@@ -322,6 +346,76 @@ class Api:
         return n, h.hexdigest()
 
 
+    def upload(self, slot, path, size):
+        """PUT a file to an upload slot's link (POST /v1/photos/uploads), streamed from disk: exactly the headers the slot
+        names plus Content-Length, never the API key (the link is the permission). A transfer cut short is sent again
+        from the start; an answer that refuses the file is not."""
+        headers = {str(k): str(v) for k, v in (slot.get("headers") or {}).items() if str(k).lower() != "content-length"}
+        headers["Content-Length"] = str(size)
+        headers.setdefault("User-Agent", self.ua)
+        for attempt in range(1, UPLOAD_TRIES + 1):
+            try:
+                with open(str(path), "rb") as f:
+                    body = Progress(f, size, path.name)
+                    req = urllib.request.Request(slot["url"], data=body, method=str(slot.get("method") or "PUT").upper(), headers=headers)
+                    with urllib.request.urlopen(req, timeout=120) as res:
+                        res.read()
+                    body.show(done=True)
+                return
+            except urllib.error.HTTPError as e:
+                text = e.read().decode("utf-8", "replace")
+                try:
+                    err = (json.loads(text) or {}).get("error") if text.strip().startswith("{") else None
+                except ValueError:
+                    err = None
+                err = err if isinstance(err, dict) else {}
+                if e.code in (500, 502, 503, 504) and attempt < UPLOAD_TRIES:
+                    reason = "HTTP {}".format(e.code)
+                elif err.get("code"):     # FaceNinja refused the file itself (the video check runs on the stored bytes)
+                    raise FNError(err.get("message") or "The upload of {} was refused: HTTP {}.".format(path.name, e.code), code=err["code"],
+                                  status=e.code, request_id=err.get("request_id"), hint=err.get("hint"))
+                else:                     # the storage link refused the transfer (expired, or a header it did not sign)
+                    raise FNError("The upload of {} was refused: HTTP {}.".format(path.name, e.code), code="upload_failed", status=e.code,
+                                  hint="Nothing was charged. Run the same command again; it asks for a new upload link.")
+            except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
+                reason = getattr(e, "reason", e)
+                if attempt == UPLOAD_TRIES:
+                    raise FNError("The upload of {} failed: {}".format(path.name, reason), code="upload_failed",
+                                  hint="Nothing was charged. Check the connection, then run the same command again.")
+            if self.out:
+                self.out.note("  upload of {} interrupted ({}); sending it again ({}/{}) ...".format(path.name, reason, attempt, UPLOAD_TRIES - 1))
+            time.sleep(2 * attempt)
+
+
+class Progress:
+    """A file on its way up: hands its bytes to the HTTP layer and says how far it got, on stderr (on a terminal one line
+    that updates; otherwise a line at each quarter, so an agent's log stays short)."""
+
+    def __init__(self, f, size, label):
+        self.f, self.size, self.label, self.sent = f, size, label, 0
+        self.tty = bool(sys.stderr and sys.stderr.isatty())
+        self.quarter, self.shown_at = -1, 0.0
+
+    def read(self, n=-1):
+        left = self.size - self.sent        # never more than Content-Length, even if the file grew meanwhile
+        b = self.f.read(left if n is None or n < 0 else min(n, left)) if left > 0 else b""
+        self.sent += len(b)
+        self.show()
+        return b
+
+    def show(self, done=False):
+        pct = 100 * self.sent // max(1, self.size)
+        line = "  uploading {}: {}% of {:.1f} MB".format(self.label, pct, self.size / 1e6)
+        if self.tty:
+            if done or time.time() - self.shown_at >= 0.5:
+                self.shown_at = time.time()
+                sys.stderr.write("\r" + line + ("\n" if done else ""))
+                sys.stderr.flush()
+        elif not done and pct < 100 and pct // 25 > self.quarter:
+            self.quarter = pct // 25
+            print(line, file=sys.stderr, flush=True)
+
+
 def parse_json(text, status, base):
     """The JSON of an answer; a page that is not JSON (a captive portal, a proxy's error page) is an error, not a traceback."""
     if not text.strip():
@@ -362,6 +456,12 @@ def account(api):
             raise FNError("The saved API key is not valid any more (revoked?).", code="unauthorized", exit_code=EXIT_AUTH,
                           hint="Run: python faceninja.py login --force")
         raise
+
+
+def video_scans_open(api):
+    """Whether the server takes a scan from one video now (prices.scan_video in /v1/account, the same switch
+    as /api/me's; a server without the field takes none)."""
+    return (account(api).get("prices") or {}).get("scan_video") is True
 
 
 def head_price(acct):
@@ -544,7 +644,20 @@ def looks_like_image(path):
     return b[:3] == b"\xff\xd8\xff" or b[:8] == b"\x89PNG\r\n\x1a\n" or (b[:4] == b"RIFF" and b[8:12] == b"WEBP") or b[4:8] == b"ftyp"
 
 
-def check_photos(paths):
+def looks_like_video(path):
+    """True when the first bytes are those of an MP4, MOV or M4V (ISO-BMFF / QuickTime boxes) or a WebM or MKV (EBML) file."""
+    with open(str(path), "rb") as f:
+        b = f.read(12)
+    return b[:4] == b"\x1a\x45\xdf\xa3" or b[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip", b"pnot")
+
+
+def file_start(path):
+    with open(str(path), "rb") as f:
+        start = f.read(24).decode("latin-1")
+    return "".join(c if 32 <= ord(c) < 127 else "?" for c in start)
+
+
+def check_photos(paths, videos_ok=False):
     photos = []
     for p in paths:
         p = Path(p).expanduser()
@@ -555,15 +668,14 @@ def check_photos(paths):
             raise FNError("No such photo: {}".format(p), code="invalid_request", exit_code=EXIT_USAGE)
         ext = p.suffix.lower()
         if ext not in IMAGE_TYPES:
-            raise FNError("{}: use JPEG, PNG, WebP, HEIC/HEIF or AVIF.".format(p.name), code="unsupported_media_type", exit_code=EXIT_USAGE)
+            raise FNError("{}: use JPEG, PNG, WebP, HEIC/HEIF or AVIF{}.".format(p.name, VIDEO_TYPES_TEXT if videos_ok else ""),
+                          code="unsupported_media_type", exit_code=EXIT_USAGE)
         size = p.stat().st_size
         if size < 1000 or size > MAX_PHOTO_BYTES:
             raise FNError("{}: {} bytes; a photo must be between 1 KB and 25 MB.".format(p.name, num(size)), code="invalid_request", exit_code=EXIT_USAGE,
                           hint="Downscale large photos to about 4000 px on the long side.")
         if not looks_like_image(p):
-            with open(str(p), "rb") as f:
-                start = f.read(24).decode("latin-1")
-            raise FNError("{}: this is not an image file (it starts with {!r}), whatever its extension says.".format(p.name, "".join(c if 32 <= ord(c) < 127 else "?" for c in start)),
+            raise FNError("{}: this is not an image file (it starts with {!r}), whatever its extension says.".format(p.name, file_start(p)),
                           code="unsupported_media_type", exit_code=EXIT_USAGE, hint="A download that failed often leaves a web page or an error text named photo.jpg. Get the real photo and try again.")
         photos.append(p)
     if not 1 <= len(photos) <= MAX_PHOTOS:
@@ -571,10 +683,89 @@ def check_photos(paths):
     return photos
 
 
-def fingerprint(photos, name):
+def check_make_files(paths, scan, base):
+    """`make`'s files: (photos, None), or ([], video) for a scan from one video. What the API would refuse (a video with
+    photos, two videos, a scan from one photo) stops here, before anything is uploaded or spent."""
+    files = [Path(p).expanduser() for p in paths]
+    videos = [p for p in files if p.suffix.lower() in VIDEO_TYPES]
+    tips = "How to shoot a scan: {}{}".format(base, SCAN_TIPS)
+    if not videos:
+        photos = check_photos(files, videos_ok=True)
+        if scan and len(photos) < SCAN_PHOTOS_MIN:
+            raise FNError("A scan takes {} to {} photos of one session (9 to 15 work best){}; got {} photo.".format(SCAN_PHOTOS_MIN, MAX_PHOTOS, OR_VIDEO, len(photos)),
+                          code="invalid_request", exit_code=EXIT_USAGE, hint=tips)
+        return photos, None
+    if len(videos) > 1:
+        raise FNError("A scan takes one video; got {}.".format(len(videos)), code="invalid_request", exit_code=EXIT_USAGE,
+                      hint="Send the one video that shows the slow head turn best. " + tips)
+    if len(files) > 1:
+        raise FNError("A scan takes one video, or {} to {} photos of one session, not both.".format(SCAN_PHOTOS_MIN, MAX_PHOTOS), code="invalid_request",
+                      exit_code=EXIT_USAGE, hint="Send the video on its own, or only the photos. " + tips)
+    v = videos[0]
+    if not v.is_file():
+        raise FNError("No such video: {}".format(v), code="invalid_request", exit_code=EXIT_USAGE)
+    size = v.stat().st_size
+    if size > MAX_VIDEO_BYTES:
+        raise FNError("{}: {:.1f} MB; a video can be at most 200 MB.".format(v.name, size / 1024 / 1024), code="video_too_large", exit_code=EXIT_USAGE,
+                      hint="Film 5 to 15 seconds of a slow head turn: as the phone saves it, that is well under 200 MB. " + tips)
+    if size < 1000 or not looks_like_video(v):
+        raise FNError("{}: this is not a video file (it starts with {!r}), whatever its extension says.".format(v.name, file_start(v)),
+                      code="unsupported_media_type", exit_code=EXIT_USAGE, hint="Send the phone's original MP4 or MOV file.")
+    return [], v
+
+
+def parse_focal(s):
+    """--focal-length: "auto", or one 35 mm-equivalent focal length in mm for every photo (or the whole video)."""
+    t = str(s).strip().lower()
+    if t == "auto":
+        return "auto"
+    try:
+        mm = float(re.sub(r"\s*mm$", "", t))
+    except ValueError:
+        mm = None
+    if mm is None or not FOCAL_MM[0] <= mm <= FOCAL_MM[1]:
+        raise FNError("--focal-length is auto, or one number: the 35 mm-equivalent focal length in mm, {} to {} (a phone's main camera is "
+                      "about 24 to 28); got {!r}.".format(FOCAL_MM[0], FOCAL_MM[1], s), code="invalid_request", exit_code=EXIT_USAGE)
+    mm = round(mm, 2)
+    return int(mm) if mm == int(mm) else mm
+
+
+def scan_options(args, video):
+    """The options of a scan for POST /v1/heads, or None for a head that is not a scan. A video always makes a scan.
+    groom and hair_preview are never sent: a scan makes neither."""
+    given = [flag for flag, v in (("--focal-length", args.focal_length), ("--texture", args.texture), ("--no-cleanup", args.no_cleanup)) if v]
+    if not (args.scan or video):
+        if given:
+            raise FNError("{} only appl{} to a scan: add --scan (2 to {} photos of one session{}).".format(
+                " and ".join(given), "ies" if len(given) == 1 else "y", MAX_PHOTOS, OR_VIDEO), code="invalid_request", exit_code=EXIT_USAGE)
+        return None
+    opts = {"scan_reconstruction": True}
+    if args.focal_length is not None:
+        opts["focal_length"] = parse_focal(args.focal_length)
+    if args.texture:
+        opts["texture"] = args.texture
+    if args.no_cleanup:
+        if args.texture == "raw":
+            raise FNError("--no-cleanup applies to the pbr texture only; a raw texture is the skin as the photos show it.", code="invalid_request",
+                          exit_code=EXIT_USAGE)
+        opts["cleanup"] = False
+    return opts
+
+
+def file_digest(path):
+    h = hashlib.sha256()
+    with open(str(path), "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def fingerprint(photos, name, scan=None):
     h = hashlib.sha256((name or "").encode("utf-8"))
-    for p in sorted(hashlib.sha256(p.read_bytes()).hexdigest() for p in photos):
-        h.update(p.encode())
+    for d in sorted(file_digest(p) for p in photos):
+        h.update(d.encode())
+    if scan:    # a scan of the same files is another head than a head from them
+        h.update(json.dumps(scan, sort_keys=True).encode())
     return h.hexdigest()[:32]
 
 
@@ -690,14 +881,33 @@ def cmd_attest(args, out):
                "Confirmed for this computer: " + ATTESTATION_TEXT)
 
 
-def create_head(api, out, photos, name, public_figure=False):
-    ids = []
+def upload_video(api, out, video):
+    """A video always goes through an upload slot: POST /v1/photos/uploads gives a link, the file is PUT there as it is."""
+    size = video.stat().st_size
+    _, page, _ = api.call("POST", "/v1/photos/uploads",
+                          body={"files": [{"content_type": VIDEO_TYPES[video.suffix.lower()], "bytes": size, "filename": video.name[:120]}]})
+    slot = ((page or {}).get("data") or [None])[0]
+    if not (isinstance(slot, dict) and slot.get("id") and isinstance(slot.get("upload"), dict) and slot["upload"].get("url")):
+        raise FNError("The server gave no upload link for the video.", code="bad_response", hint="Run the same command again.")
+    api.upload(slot["upload"], video, size)
+    out.say("  uploaded {} -> {}".format(video.name, slot["id"]))
+    return slot["id"]
+
+
+def create_head(api, out, photos, name, public_figure=False, scan=None, video=None):
+    try:
+        ids = [upload_video(api, out, video)] if video else []
+    except FNError as e:
+        e.hint = e.hint or scan_hint(e.code, api.base, video=True)
+        raise
     for p in photos:
         q = urllib.parse.urlencode({"filename": p.name[:120]})
         _, ph, _ = api.call("POST", "/v1/photos?" + q, raw=p.read_bytes(), content_type=IMAGE_TYPES[p.suffix.lower()], timeout=180)
         ids.append(ph["id"])
         out.say("  uploaded {} -> {}".format(p.name, ph["id"]))
     body = {"photo_ids": ids, "attestation": ATTESTATION}   # the user confirmed it for this computer (require_attestation)
+    if scan:
+        body["options"] = scan
     if public_figure:
         body["public_figure"] = True
     if name:
@@ -705,6 +915,7 @@ def create_head(api, out, photos, name, public_figure=False):
     try:
         _, head, _ = api.call("POST", "/v1/heads", body=body, headers={"Idempotency-Key": str(uuid.uuid4())})
     except FNError as e:
+        e.hint = e.hint or (scan_hint(e.code, api.base, video=bool(video)) if scan else None)
         if e.code == "insufficient_credits":
             e.exit_code = EXIT_CREDITS
             e.hint = "Buy credits at {}/factory#/billing".format(api.base)
@@ -756,9 +967,53 @@ def wait_head(api, out, head_id, max_wait=0):
             return h
 
 
+def scan_hint(code, base, video=False):
+    """What to change when a scan (or its video) is refused, in the capture guide's words; None for other codes."""
+    tips = " How to shoot a scan: {}{}".format(base, SCAN_TIPS)
+    turn = "Film 5 to 15 seconds of a slow head turn: start facing the camera, turn slowly to one side, then all the way to the other, and back."
+    return {
+        "unsupported_video": "Send the phone's original MP4 or MOV file (not a screen recording or a messenger copy), and only one video, or photos, not both." + tips,
+        "video_too_short": turn + tips,
+        "video_too_long": turn + " At most 60 seconds." + tips,
+        "video_too_large": "A video can be at most 200 MB. " + turn + tips,
+        "no_face_in_video": "Film the face from the front first, at eye height, an arm's length away (50 to 80 cm), in soft even light, with the head "
+                            "filling about half of the picture's height." + tips,
+        "too_few_views": ("Film a slow head turn from one side to the other, in good light, eyes open." if video else
+                          "Send 9 to 15 photos of one session: the front, then about 15 to 60 degrees to each side.") + tips,
+        "too_many_photos": "A scan takes at most 15 photos, or one video." + tips,
+        "reconstruction_failed": "Shoot again in one session, in the same soft light, with a neutral face." + tips,
+        "inconsistent_capture": "Shoot again in one session: the person keeps still with a neutral face, the light stays the same." + tips,
+        "not_available": "Make the scan from 2 to 15 photos of one session instead: python faceninja.py make --scan PHOTO...",
+    }.get(code)
+
+
+def capture_lines(scan, base):
+    """A scan head's capture check (scan.capture) for people: the quality, then each issue's severity, code and message.
+    [] until the capture was analysed (and for heads that are not scans)."""
+    c = scan.get("capture") if isinstance(scan, dict) else None
+    if not isinstance(c, dict) or not c.get("quality"):
+        return []
+    cov = c.get("coverage") if isinstance(c.get("coverage"), dict) else {}
+    video = scan.get("video") if isinstance(scan.get("video"), dict) else {}
+    what = "frames" if (c.get("source") or scan.get("source")) == "video" else "photos"
+    bits = []
+    if isinstance(cov.get("photos"), int) and isinstance(cov.get("photos_used"), int):
+        bits.append("{} of {} {} used".format(cov["photos_used"], cov["photos"], what))
+    if isinstance(video.get("duration_s"), (int, float)):
+        bits.append("from a {:.1f} s video".format(video["duration_s"]))
+    lines = ["Capture check: {}{}".format(plain(c["quality"], 20), " ({})".format(", ".join(bits)) if bits else "")]
+    for i in c.get("issues") or []:
+        if isinstance(i, dict):
+            lines.append("  - {} {}: {}".format(plain(i.get("severity") or "note", 20), plain(i.get("code"), 40), plain(i.get("message"), 300)))
+    if c.get("quality") == "poor":
+        lines.append("  A poor capture still makes a head, but a retake will give a more accurate one: {}{}".format(base, SCAN_TIPS))
+    return lines
+
+
 def head_failure(h, base):
     err = h.get("error") or {}
     code = err.get("code") or h.get("status")
+    scan = h.get("scan") if isinstance(h.get("scan"), dict) else None
     hint = {
         "no_face": "Use a sharp photo where one face is clearly visible.",
         "multiple_people": "Crop the photos to one person.",
@@ -768,11 +1023,12 @@ def head_failure(h, base):
         "blurry_photo": "A photo is heavily blurred: send a sharp one.",
         "face_too_small": "The face in a photo is too small: send the original, full-size photo.",
         "content_rejected": "The photo was refused by the content check (people under 18, nudity, or not a real photo).",
-    }.get(code, "See the photo guide: {}/guidelines".format(base))
+    }.get(code) or (scan is not None and (scan_hint(code, base, video=scan.get("source") == "video" or bool(scan.get("video")))
+                                          or "How to shoot a scan: {}{}".format(base, SCAN_TIPS))) or "See the photo guide: {}/guidelines".format(base)
     credits = (h.get("credits") or {}).get("state")
     msg = "Head {} {}: {}{}".format(h.get("id"), h.get("status"), err.get("message") or code,
                                    " Credits returned." if credits == "released" and "returned" not in (err.get("message") or "") else "")
-    return FNError(msg, code=code, hint=hint, exit_code=EXIT_FAILED, data={"head": h})
+    return FNError(msg, code=code, hint=hint, exit_code=EXIT_FAILED, data=dict({"head": h}, **({"scan": scan} if scan is not None else {})))
 
 
 def safe_name(s):
@@ -852,14 +1108,26 @@ def quote(api, out, count):
 
 def cmd_make(args, out):
     if not args.photos:
-        raise FNError("Give 1 to {} photos of the same person.".format(MAX_PHOTOS), code="invalid_request", exit_code=EXIT_USAGE)
-    photos = check_photos(args.photos)
+        raise FNError("Give 1 to {} photos of the same person{}.".format(MAX_PHOTOS, ", or for a scan {}".format(SCAN_WHAT.replace(", or", " or"))
+                      if args.scan else ""), code="invalid_request", exit_code=EXIT_USAGE)
+    api = None
+    if any(Path(p).suffix.lower() in VIDEO_TYPES for p in args.photos):
+        # a video only while the server takes them: asked before anything is checked, uploaded or held
+        api = api_for(args, out)
+        if not video_scans_open(api):
+            raise FNError(VIDEO_CLOSED.format(MAX_PHOTOS), code="not_available", exit_code=EXIT_ERROR,
+                          hint="How to shoot a scan: {}{}".format(args.base, SCAN_TIPS))
+    photos, video = check_make_files(args.photos, args.scan, args.base)
+    scan = scan_options(args, video)
+    if video and not args.scan:
+        out.note("{} is a video: making a scan (beta) from it, as with --scan.".format(video.name))
     formats = parse_formats(args.formats)
     out_dir = Path(args.out).expanduser().resolve()
-    api = api_for(args, out)
-    name = args.name or photos[0].stem
+    api = api or api_for(args, out)
+    files = [video] if video else photos
+    name = args.name or files[0].stem
     state = load_state(out_dir)
-    fp = fingerprint(photos, name)
+    fp = fingerprint(files, name, scan)
     head = None
     prev = state["heads"].get(fp)
     if prev and not args.new:
@@ -868,7 +1136,7 @@ def cmd_make(args, out):
             if head.get("status") in ("failed", "deleted"):
                 head = None
             else:
-                out.say("Resuming head {} made from these photos earlier ({}). Use --new for another head.".format(head["id"], head["status"]))
+                out.say("Resuming head {} made from {} earlier ({}). Use --new for another head.".format(head["id"], "this video" if video else "these photos", head["status"]))
         except FNError as e:
             if e.status != 404:
                 raise
@@ -877,19 +1145,23 @@ def cmd_make(args, out):
     if head is None:
         q = quote(api, out, 1)
         if args.dry_run:
-            return out.result(dict(ok=True, dry_run=True, quote=q, photos=[str(p) for p in photos], name=name, formats=formats),
+            extra = {"scan_options": scan, "video": str(video) if video else None} if scan else {}
+            return out.result(dict(ok=True, dry_run=True, quote=q, photos=[str(p) for p in photos], name=name, formats=formats, **extra),
                               "Dry run: nothing uploaded or spent." + ("" if q["sufficient"] else
                               "\nThe balance is too low: a real run would stop with exit 5. Buy credits at {}/factory#/billing".format(args.base)))
         if not q["sufficient"]:
             raise FNError("Not enough credits: a head costs {} credits, the balance is {}.".format(num(q["credits_per_head"]), num(q["balance"])),
                           code="insufficient_credits", exit_code=EXIT_CREDITS, hint="Buy credits at {}/factory#/billing".format(args.base))
         require_attestation(api, out)
-        head = create_head(api, out, photos, name, args.public_figure)
-        state["heads"][fp] = {"id": head["id"], "name": name, "photos": [str(p) for p in photos], "created_at": head.get("created_at")}
+        head = create_head(api, out, photos, name, args.public_figure, scan, video)
+        state["heads"][fp] = dict({"id": head["id"], "name": name, "photos": [str(p) for p in files], "created_at": head.get("created_at")},
+                                  **({"scan": True} if scan else {}))
         save_state(out_dir, state)
         out.say("Created head {} ({}). {} credits held.".format(head["id"], head_line(head), num(q["credits_per_head"])))
     result = {"ok": True, "id": head["id"], "name": name, "status": head.get("status"), "quote": q, "out": str(out_dir)}
     if not args.wait:
+        if head.get("scan") is not None:
+            result["scan"] = head["scan"]
         return out.result(dict(result, next="python faceninja.py status {} --wait".format(head["id"])),
                           "Head {} is {}. Follow it: python faceninja.py status {} --wait".format(head["id"], head.get("status"), head["id"]))
     try:
@@ -897,6 +1169,8 @@ def cmd_make(args, out):
             out.say("Waiting for {} (usually 10 to 20 minutes, because each head is built carefully; longer when the line is long)...".format(head["id"]))
             head = wait_head(api, out, head["id"], args.max_wait)
         if head.get("status") != "completed":
+            for line in capture_lines(head.get("scan"), args.base):
+                out.say(line)
             raise head_failure(head, args.base)
         saved, skipped = download_files(api, out, head["id"], formats, out_dir, args.arkit)
     except FNError as e:
@@ -907,7 +1181,9 @@ def cmd_make(args, out):
                 e.hint or "", " " if e.hint else "", head["id"])
         raise
     result.update(status="completed", files=saved, skipped=skipped)
-    out.result(result, "Done: head {} saved to {}".format(head["id"], out_dir))
+    if head.get("scan") is not None:
+        result["scan"] = head["scan"]
+    out.result(result, "\n".join(["Done: head {} saved to {}".format(head["id"], out_dir)] + capture_lines(head.get("scan"), args.base)))
 
 
 def cmd_status(args, out):
@@ -917,10 +1193,12 @@ def cmd_status(args, out):
     else:
         _, h, _ = api.call("GET", "/v1/heads/{}".format(args.id))
     files = [f.get("format") + ("+arkit" if f.get("arkit") else "") for f in (h.get("files") or [])]
+    capture = capture_lines(h.get("scan"), args.base)
     out.result({"ok": True, "head": h},
                "{} {}: {}{}".format(h["id"], "(" + h["name"] + ")" if h.get("name") else "", head_line(h),
                                      "\nFiles: " + ", ".join(files) if files else "") +
-               ("\nError: {} ({})".format((h.get("error") or {}).get("message"), (h.get("error") or {}).get("code")) if h.get("error") else ""))
+               ("\nError: {} ({})".format((h.get("error") or {}).get("message"), (h.get("error") or {}).get("code")) if h.get("error") else "") +
+               ("\n" + "\n".join(capture) if capture else ""))
     if args.wait and h.get("status") == "failed":
         sys.exit(EXIT_FAILED)
 
@@ -1001,8 +1279,17 @@ def people_in(folder, per_person):
     return people
 
 
+def videos_in(folder, per_person):
+    folder = Path(folder).expanduser()
+    dirs = [folder] + ([d for d in folder.iterdir() if d.is_dir()] if per_person and folder.is_dir() else [])
+    return [p for d in dirs if d.is_dir() for p in d.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_TYPES]
+
+
 def cmd_batch(args, out):
     people = people_in(args.folder, args.per_person_subfolders)
+    skipped = videos_in(args.folder, args.per_person_subfolders)
+    if skipped:
+        out.note(BATCH_SKIPPED.format(len(skipped), skipped[0]))
     formats = parse_formats(args.formats)
     out_dir = Path(args.out).expanduser().resolve()
     api = api_for(args, out)
@@ -1654,12 +1941,20 @@ def main(argv=None):
         a.add_argument("--static", dest="arkit", action="store_false", help="GLB/FBX without blendshapes")
         p.add_argument("--dry-run", action="store_true", help="show the cost and balance, upload and spend nothing")
 
-    s = sub.add_parser("make", parents=[common], help="make heads from your photos",
-                       description="Make heads from your photos: 1 to {} photos of the same person make one head.".format(MAX_PHOTOS))
+    make_help = "make heads from your photos, or a scan (beta) from several photos"
+    make_scan = "reconstruction from 2 to {} photos of one session. "
+    focal_help = "with --scan: auto (default), or the lens's 35 mm-equivalent focal length in mm for every photo"
+    s = sub.add_parser("make", parents=[common], help=make_help,
+                       description="Make heads from your photos: 1 to {} photos of the same person make one head. With --scan (beta): 3D "
+                                   "{}How to shoot a scan: https://faceninja.net{}".format(MAX_PHOTOS, make_scan.format(MAX_PHOTOS), SCAN_TIPS))
     s.add_argument("--public-figure", action="store_true", help="declare that the uploaded photos depict a public figure; staff verification is required")
-    s.add_argument("photos", nargs="*", metavar="PHOTO", help="photos of one person (JPEG, PNG, WebP, HEIC, AVIF)")
+    s.add_argument("photos", nargs="*", metavar="PHOTO", help="photos of one person (JPEG, PNG, WebP, HEIC, AVIF); with --scan " + SCAN_WHAT)
     s.add_argument("--name", help="a name for the head (default: the first photo's file name)")
     s.add_argument("--new", action="store_true", help="make a new head even if these photos already made one in --out")
+    s.add_argument("--scan", action="store_true", help="a scan (beta): 3D reconstruction from " + SCAN_WHAT)
+    s.add_argument("--focal-length", metavar="auto|MM", help=focal_help)
+    s.add_argument("--texture", type=str.lower, choices=("pbr", "raw"), help="with --scan: pbr (default; evenly lit skin with PBR maps) or raw (the skin as the photos show it)")
+    s.add_argument("--no-cleanup", action="store_true", help="with --scan and the pbr texture: keep hair and marks on the skin as they are")
     head_opts(s)
     s.set_defaults(fn=cmd_make)
 
@@ -1678,7 +1973,10 @@ def main(argv=None):
     a.add_argument("--static", dest="arkit", action="store_false")
     s.set_defaults(fn=cmd_download)
 
-    s = sub.add_parser("batch", parents=[common], help="one head per photo, or per subfolder with --per-person-subfolders")
+    batch_desc = ("One head per photo in a folder, or per subfolder with --per-person-subfolders. Photos only: a scan is made "
+                  "with `make --scan`.")
+    s = sub.add_parser("batch", parents=[common], help="one head per photo, or per subfolder with --per-person-subfolders (photos only)",
+                       description=batch_desc)
     s.add_argument("folder")
     s.add_argument("--per-person-subfolders", action="store_true", help="each subfolder holds 1-15 photos of one person")
     s.add_argument("--yes", action="store_true", help="the user confirmed the cost (needed above {} heads)".format(BATCH_CONFIRM_ABOVE))
@@ -1720,6 +2018,10 @@ def main(argv=None):
     args, extra = ap.parse_known_args(argv)
     if extra and getattr(args, "cmd", None) == "make":
         print("Error: Heads from a text description are no longer offered. FaceNinja makes heads from photos.", file=sys.stderr)
+        return EXIT_USAGE
+    if extra and getattr(args, "cmd", None) == "batch" and any(x.split("=")[0] in SCAN_FLAGS for x in extra):
+        print("Error: batch makes heads from photos only. A scan ({}): python faceninja.py make --scan FILE...".format(SCAN_WHAT),
+              file=sys.stderr)
         return EXIT_USAGE
     if extra:
         ap.error("unrecognized arguments: " + " ".join(extra))

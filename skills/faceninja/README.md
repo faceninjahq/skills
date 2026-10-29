@@ -50,6 +50,7 @@ Or use the script yourself:
 python3 scripts/faceninja.py login                 # opens faceninja.net/device; approve the code shown
 python3 scripts/faceninja.py balance
 python3 scripts/faceninja.py make me.jpg me-side.jpg --name Me --formats glb,fbx,zip
+python3 scripts/faceninja.py make --scan front.jpg left.jpg right.jpg --name Me   # a scan (beta): 2 to 15 photos of one session
 python3 scripts/faceninja.py batch ./cast --per-person-subfolders --dry-run
 ```
 

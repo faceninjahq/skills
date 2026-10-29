@@ -1,9 +1,9 @@
 ---
 name: faceninja
-description: Turn photos or a selfie of a person into a 3D head on MetaHuman topology with FaceNinja (faceninja.net) - GLB or FBX with the 52 ARKit blendshapes, OBJ/STL/PLY, 4K skin textures and a MetaHuman ZIP for Unreal Engine. Use when the user wants a 3D head, avatar or MetaHuman of themselves or a consenting adult from one or more photos, ARKit blendshapes for a real face, or a folder of photos converted in a batch. Paid service (USD 15 per head), so state the cost and balance before spending.
+description: Turn photos or a selfie of a person into a 3D head on MetaHuman topology with FaceNinja (faceninja.net) - GLB or FBX with the 52 ARKit blendshapes, OBJ/STL/PLY, 4K skin textures and a MetaHuman ZIP for Unreal Engine. Use when the user wants a 3D head, avatar or MetaHuman of themselves or a consenting adult from one or more photos (or a scan from several photos of one session), ARKit blendshapes for a real face, or a folder of photos converted in a batch. Paid service (USD 15 per head), so state the cost and balance before spending.
 license: MIT
 metadata:
-  version: "1.4.4"
+  version: "1.4.5"
   homepage: https://faceninja.net/agents
 ---
 
@@ -139,6 +139,32 @@ and an apparent child. Nothing checks sunglasses, masks, hands over the face, cu
 resolution, and they make a worse head. **Choose the photos carefully: a head that comes out disappointing because of the
 photo is not refunded; a head that fails to build is refunded automatically.** Say this to the user before the first head.
 
+### Scan (beta): several photos of one session
+
+`--scan` makes the head by 3D reconstruction from your photos: 2 to 15 photos of one session. Seeing the face from
+several directions, it measures the face's depth instead of estimating it. Same price as any head.
+
+```
+FN make --scan front.jpg left.jpg right.jpg [... 15 at most] --name "Ana" --out ./faceninja-out --max-wait 540 --json
+```
+
+- Photos: 2 to 15 of one session (9 to 15 measure the face much better). A scan from one photo stops with exit 2 before
+  anything is uploaded.
+- How to shoot (tell the user before they start; the full guide is https://faceninja.net/photo-tips#scan): soft, even
+  light, a neutral face, no glasses or hat; the main camera (1x) at eye height, an arm's length away (50 to 80 cm). The
+  person keeps still; take the front and about 15, 30, 45 and 60 degrees to each side. Send the phone's original files
+  (they carry the lens's focal length), not screenshots or messenger copies.
+- Options, only with a scan (otherwise exit 2): `--focal-length auto|<mm>` (default `auto`: from the photos' EXIF, else
+  estimated), `--texture pbr|raw` (default `pbr`: evenly lit skin with PBR maps; `raw`: the skin as the photos show
+  it, in their light), `--no-cleanup` (pbr only: keep hair and stray marks on the skin). A scan makes no groom and no
+  hair preview.
+- **The capture check.** When a scan head is completed or has failed, the script prints `Capture check: good`, `fair` or
+  `poor`, then each issue (`major` or `minor`, its code and a sentence saying what to change). `--json` returns it as
+  `scan.capture` (`quality`, `issues[]` with `code`, `severity`, `message`), and `FN status ID` shows it too. A `poor`
+  check still makes a head, but a retake will give a more accurate one: tell the user what the messages say to change.
+  Issue codes: `missing_side`, `too_little_turn`, `long_lens_flat`, `few_photos`, `blur`, `lighting_change`,
+  `low_resolution`, `expression_change`, `few_matches`, `photo_not_used`, `inconsistent_photo` (a newer server may add others).
+
 ## 5. A folder of people
 
 ```
@@ -151,10 +177,11 @@ FN batch ./photos --out ./faceninja-out --max-wait 540 --json
 - More than 5 new heads (or the number the server's guidance gives) exits 3 (`confirmation_required`) until you add `--yes`. Add `--yes` only after the user
   confirmed the total cost shown by the dry run.
 - Running the same batch again resumes; nothing is created twice. Files go to `<out>/<person>/`.
+- Photos only: scan options are refused. A scan is `FN make --scan` (section 4).
 
 ## 6. Other commands
 
-`FN status ID [--wait]`, `FN download ID --formats glb,fbx,zip --out DIR`, `FN list`, `FN samples [--download ID|all]`, `FN logout` (revokes the saved key),
+`FN status ID [--wait]` (with the capture check of a scan head), `FN download ID --formats glb,fbx,zip --out DIR`, `FN list`, `FN samples [--download ID|all]`, `FN logout` (revokes the saved key),
 `FN update [--check | --rollback]`, `FN guidance`, `FN attest [--check | --revoke]`.
 
 ## 7. Test mode (sandbox.faceninja.net)
@@ -182,13 +209,14 @@ FN whoami --json                                             # then sign in as i
 
 | Exit | `error.code` | What to do |
 | --- | --- | --- |
-| 2 | `invalid_request`, `unsupported_media_type` | Fix the command or the photo (JPEG, PNG, WebP, HEIC, AVIF; 1 KB to 25 MB). |
+| 2 | `invalid_request`, `unsupported_media_type` | Fix the command or the file: photos are JPEG, PNG, WebP, HEIC or AVIF, 1 KB to 25 MB; a scan is 2 to 15 photos. |
 | 3 | `confirmation_required` | Ask the user to confirm the total, then add `--yes`. |
 | 3 | `attestation_required` | Show the user the attestation (section 2) and ask; only after they say yes run `FN attest --confirmed-by-user`. |
 | 3 | `terms_not_accepted` | The user accepts the terms once at https://faceninja.net/factory, then run the same command again. |
 | 4 | `not_signed_in`, `unauthorized`, `access_denied`, `expired_token` | Sign in (section 1). |
 | 5 | `insufficient_credits` | Nothing was created or charged. Tell the user to buy credits; do not retry. |
 | 6 | `no_face`, `multiple_people`, `not_same_person`, `unreadable_photo`, `greyscale_photo`, `blurry_photo`, `face_too_small`, `content_rejected` | The credits came back. Explain the reason and ask for better photos; do not resend the same ones. |
+| 6 | `too_few_views`, `too_many_photos`, `reconstruction_failed`, `inconsistent_capture` | A scan failed and the credits came back. Read `hint` and the capture check, and ask the user for new photos (section 4, Scan); do not resend the same files. |
 | 6 | `build_failed`, `timeout` | The credits came back. Retry once; then report it. |
 | 75 | `still_running`, `authorization_pending` | Run the same command again. |
 | 75 | `licence_review_required` | The head waits for staff review (usually 1–2 business days; credits held). Send the user the Factory link in `hint`; do not rerun the command in a loop. |
