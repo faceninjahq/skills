@@ -3,7 +3,7 @@ name: faceninja
 description: Turn photos or a selfie of a person into a 3D head on MetaHuman topology with FaceNinja (faceninja.net) - GLB or FBX with the 52 ARKit blendshapes, OBJ/STL/PLY, 4K skin textures and a MetaHuman ZIP for Unreal Engine. Use when the user wants a 3D head, avatar or MetaHuman of themselves or a consenting adult from one or more photos (or a scan from several photos of one session), ARKit blendshapes for a real face, or a folder of photos converted in a batch. Paid service (USD 15 per head), so state the cost and balance before spending.
 license: MIT
 metadata:
-  version: "1.4.5"
+  version: "1.4.11"
   homepage: https://faceninja.net/agents
 ---
 
@@ -87,20 +87,24 @@ to open https://faceninja.net/factory, tick the box once, and then run the same 
 
 ## 3. Cost and balance, before spending anything
 
-A head costs **1,500 credits = USD 15**. Failed heads give their credits back; downloads are free and repeatable.
-Run `FN balance --json`, then tell the user what it will cost and what is left, for example "1 head = 1,500 credits ($15);
-your balance is 3,000 credits (2 heads)." For one to five heads the user asked for, say this and go ahead. **For more
-than five heads, stop and ask the user to confirm the total first.** Never buy credits; if the balance is too low, tell
-the user to buy them at https://faceninja.net/factory#/billing (credits go on sale there at launch; until then, say so
+A head costs **one head from your balance (USD 15)**. A head that fails goes back to your balance; downloads are free
+and repeatable. Run `FN balance --json`: `heads` is the balance in heads (for example 4.25) and `held_heads` the part
+held by heads still being built. The JSON also keeps `credits` and `held_credits`, the same balance in the API's
+internal units (1,500 to a head): use them to compare numbers, but never show them to the user; always say heads and
+dollars. Tell the user what it will cost and what is left, for example "1 head ($15); your balance is 4.25 heads." For
+one to five heads the user asked for, say this and go ahead. **For more than five heads, stop and ask the user to
+confirm the total first.** Never buy heads for the user; if the balance is too low, tell the user to buy them at
+https://faceninja.net/factory#/billing (heads go on sale there at launch; until then, say so
 and stop). If `balance` shows auto-reload on, a head the balance
 cannot pay waits for an automatic top-up (stage `waiting_for_payment`) and that top-up is charged to the user's card:
-count it in the cost you state. Never turn auto-reload on or raise its limits for the user.
+count it in the cost you state. Never turn auto-reload on or raise its limits for the user. Where `balance` says
+auto-reload is not offered, a short balance is a 402: tell the user to top up in Factory → Billing (one click there).
 
 ### Free sample heads first
 
-Every account, even with 0 credits, can download 15 sample heads free: eight Real-life detail and seven Creator style
+Every account, even with 0 heads, can download 15 sample heads free: eight Real-life detail and seven Creator style
 (the API's `set` field is `realism` or `creator`). GLB and FBX have the 52 ARKit shapes, and each head includes a
-MetaHuman ZIP. Use them to try the user's pipeline before spending credits:
+MetaHuman ZIP. Use them to try the user's pipeline before spending a head:
 `FN samples --json` lists them (no sign-in needed), `FN samples --download S-07 --out ./faceninja-samples --json` saves one
 (`all` for every sample; downloading needs an account). 30 sample files a day per account. Licence: free for personal and commercial use, no resale or redistribution
 of the files as they are (https://faceninja.net/samples/LICENSE.txt).
@@ -114,13 +118,11 @@ FN make photo.jpg [more photos of the SAME person, 15 at most] --name "Ana" --fo
 ```
 
 It checks the photos, prints the cost, uploads, creates the head (with an `Idempotency-Key`), waits and downloads.
-Every head made from uploaded photos is first held for staff review (usually 1–2 business days; the credits stay held
-and come back on rejection or after 14 days). Once cleared, the build usually takes 10 to 20 minutes, because each head
-is built carefully, and longer when there is a queue. Tell the user so before you start.
+Every head goes through automatic checks first (the photos, and a public-figure screen). A head that passes is built
+straight away; the build usually takes 10 to 20 minutes, because each head is built carefully, and longer when there is
+a queue. A head that does not pass is refused automatically and goes back to your balance at once (exit 6, see "Public
+figures and automatic checks" below). Tell the user so before you start.
 
-- Exit 75 `licence_review_required`: the head is in staff review. Send the user the Factory link from `hint` and stop;
-  running the command again does not speed it up (see "Public figures and staff review" below). When the user says the
-  review is done, run the same `make` command again: it resumes the head.
 - Exit 75 `still_running`: still building. Do not give up early: run the **same** `make` command again (expect two or
   three runs). It resumes the same head (state in `<out>/.faceninja.json`) and charges nothing twice. Or
   `FN status ID --wait --max-wait 540 --json`, then `FN download ID`.
@@ -133,7 +135,7 @@ is built carefully, and longer when there is a queue. Tell the user so before yo
   failed download) stops with exit 2, `unsupported_media_type`.
 
 Good photos: one sharp, well-lit photo of one adult face is enough; extra photos of the same person from other angles
-help. No group photos, no heavy filters, recent photos only. Before a head is built every photo is checked for a face
+help. No group photos, no heavy filters, recent photos only. Before a head is built each photo is checked for a face
 (at least about 100 pixels across), a second person, a different person, black and white or sepia, heavy blur, nudity
 and an apparent child. Nothing checks sunglasses, masks, hands over the face, cut-off faces, heavy grading or low
 resolution, and they make a worse head. **Choose the photos carefully: a head that comes out disappointing because of the
@@ -150,10 +152,12 @@ FN make --scan front.jpg left.jpg right.jpg [... 15 at most] --name "Ana" --out 
 
 - Photos: 2 to 15 of one session (9 to 15 measure the face much better). A scan from one photo stops with exit 2 before
   anything is uploaded.
-- How to shoot (tell the user before they start; the full guide is https://faceninja.net/photo-tips#scan): soft, even
-  light, a neutral face, no glasses or hat; the main camera (1x) at eye height, an arm's length away (50 to 80 cm). The
-  person keeps still; take the front and about 15, 30, 45 and 60 degrees to each side. Send the phone's original files
-  (they carry the lens's focal length), not screenshots or messenger copies.
+- How to shoot (tell the user before they start; the full guide is https://faceninja.net/photo-tips#scan): glasses off,
+  even clear ones (fine for a photo head, but a scan with glasses gets a poor capture check); soft, even light, a neutral
+  face, no hat; the main camera (1x) at eye height, an arm's length away (50 to 80 cm). The person keeps still; take
+  the front and about 15, 30, 45 and 60 degrees to each side (about 9 photos measure best; profiles are not needed).
+  With only three photos: the front and about 20 to 30 degrees to each side. Send the phone's original files (they
+  carry the lens's focal length), not screenshots or messenger copies.
 - Options, only with a scan (otherwise exit 2): `--focal-length auto|<mm>` (default `auto`: from the photos' EXIF, else
   estimated), `--texture pbr|raw` (default `pbr`: evenly lit skin with PBR maps; `raw`: the skin as the photos show
   it, in their light), `--no-cleanup` (pbr only: keep hair and stray marks on the skin). A scan makes no groom and no
@@ -163,7 +167,8 @@ FN make --scan front.jpg left.jpg right.jpg [... 15 at most] --name "Ana" --out 
   `scan.capture` (`quality`, `issues[]` with `code`, `severity`, `message`), and `FN status ID` shows it too. A `poor`
   check still makes a head, but a retake will give a more accurate one: tell the user what the messages say to change.
   Issue codes: `missing_side`, `too_little_turn`, `long_lens_flat`, `few_photos`, `blur`, `lighting_change`,
-  `low_resolution`, `expression_change`, `few_matches`, `photo_not_used`, `inconsistent_photo` (a newer server may add others).
+  `low_resolution`, `expression_change`, `few_matches`, `photo_not_used`, `inconsistent_photo`, `glasses` (a newer server may add others). `glasses` (major): the person wore glasses; ask
+  them to take the glasses off, even clear ones, and shoot again.
 
 ## 5. A folder of people
 
@@ -196,12 +201,12 @@ FN whoami --json                                             # then sign in as i
 
 - The script prints `FaceNinja test mode (sandbox.faceninja.net): ...` and the JSON result carries `"test_mode": true`.
   **Tell the user it is a test**, and never present a test head as a real head of their photo.
-- The user signs up at https://sandbox.faceninja.net/signup (open to anyone) and buys credits in Factory there with a test
+- The user signs up at https://sandbox.faceninja.net/signup (open to anyone) and buys heads in Factory there with a test
   card: `4242 4242 4242 4242`, any future expiry date, any security code. `4000 0000 0000 0002` is declined, `4000 0038 0000 0446`
   asks for a 3-D Secure check. Nothing is charged.
-- A head costs credits as usual, takes about a minute, and is one of the available sample heads, chosen by the photo (`test_build`
+- A head costs one head from the balance as usual, takes about a minute, and is one of the available sample heads, chosen by the photo (`test_build`
   names it). A first photo named `fail-no_face.jpg` (or another error code from the table below) fails the head with that
-  code and returns the credits, to test failures. OBJ, STL and PLY are not made there.
+  code and goes back to the balance, to test failures. OBJ, STL and PLY are not made there.
 - Only sign-in emails are sent. Accounts and keys are separate from faceninja.net, and are deleted 30 days after sign-up.
 - Unset `FACENINJA_API_BASE` to go back to faceninja.net.
 
@@ -214,12 +219,14 @@ FN whoami --json                                             # then sign in as i
 | 3 | `attestation_required` | Show the user the attestation (section 2) and ask; only after they say yes run `FN attest --confirmed-by-user`. |
 | 3 | `terms_not_accepted` | The user accepts the terms once at https://faceninja.net/factory, then run the same command again. |
 | 4 | `not_signed_in`, `unauthorized`, `access_denied`, `expired_token` | Sign in (section 1). |
-| 5 | `insufficient_credits` | Nothing was created or charged. Tell the user to buy credits; do not retry. |
-| 6 | `no_face`, `multiple_people`, `not_same_person`, `unreadable_photo`, `greyscale_photo`, `blurry_photo`, `face_too_small`, `content_rejected` | The credits came back. Explain the reason and ask for better photos; do not resend the same ones. |
-| 6 | `too_few_views`, `too_many_photos`, `reconstruction_failed`, `inconsistent_capture` | A scan failed and the credits came back. Read `hint` and the capture check, and ask the user for new photos (section 4, Scan); do not resend the same files. |
-| 6 | `build_failed`, `timeout` | The credits came back. Retry once; then report it. |
+| 5 | `insufficient_credits` | Nothing was created or charged: the balance has fewer heads than the request needs. Tell the user to buy heads; do not retry. |
+| 6 | `no_face`, `multiple_people`, `not_same_person`, `unreadable_photo`, `greyscale_photo`, `blurry_photo`, `face_too_small`, `content_rejected` | The head went back to your balance. Explain the reason and ask for better photos; do not resend the same ones. |
+| 6 | `too_few_views`, `too_many_photos`, `reconstruction_failed`, `inconsistent_capture` | A scan failed and the head went back to your balance. Read `hint` and the capture check, and ask the user for new photos (section 4, Scan); do not resend the same files. |
+| 6 | `public_figure` | Refused automatically; the head went back to your balance at once. Tell the user the photos may show a public figure and FaceNinja does not make heads of public figures. Do not try other photos of that person. |
+| 6 | `likeness_unverified` | Refused automatically; the head went back to your balance at once. Tell the user the automatic check could not clear the photos, and ask for other photos of the same person. |
+| 6 | `build_failed`, `timeout` | The head went back to your balance. Retry once; then report it. |
 | 75 | `still_running`, `authorization_pending` | Run the same command again. |
-| 75 | `licence_review_required` | The head waits for staff review (usually 1–2 business days; credits held). Send the user the Factory link in `hint`; do not rerun the command in a loop. |
+| 75 | `licence_review_required` | The head is waiting on its page in Factory and is not being built. Send the user the link in `hint` and stop; do not rerun the command in a loop. |
 | 1 | `skill_update_required` | The skill is too old for the API and could not update itself: run `FN update`, then the same command. |
 | 1 | `busy` | FaceNinja is at capacity for now and nothing was charged. Tell the user to try again in an hour; do not retry in a loop. |
 | 1 | `rate_limited`, `network`, `bad_response`, `internal_error`, other | The script already retried. Wait a minute and retry; quote `request_id` to support@faceninja.net. For `rate_limited` with `retry_after_s` above 90 the script did not wait: tell the user, and retry after that many seconds. |
@@ -232,7 +239,7 @@ its `id`. Run the same `make` command again; it resumes that head and never char
 ## Rules
 
 - Only photos of the user, or of adults who gave the user their informed consent to have a 3D head made of them. Nobody
-  under 18, no public figures without their written permission, and no photos of people taken from the
+  under 18, no public figures (FaceNinja does not make heads of public figures), and no photos of people taken from the
   internet without their consent. The user is responsible for the photos and for how the heads are used
   (https://faceninja.net/legal/content-policy); you never give the attestation on their behalf.
 - Do not help use a head to impersonate someone, deceive people, harass, or make sexual content of a real person.
@@ -240,16 +247,12 @@ its `id`. Run the same `make` command again; it resumes that head and never char
 - API details for anything the script does not cover: `reference/api.md` (https://faceninja.net/skill/reference/api.md)
   and the full reference at https://faceninja.net/docs/.
 
-## Public figures and staff review
+## Public figures and automatic checks
 
-Every photo (including scan inputs) is screened for public figures before 3D work, and on
-faceninja.net every head made from uploaded photos is held for staff review: staff can clear it only after the user sends
-the form on the head's Factory page. Impersonation, deceptive fakes of real people, sexual content of real people, harassment and political deception are refused.
-Use only content the user owns or has rights to, with every depicted adult's consent. A public figure needs permission
-verified by staff. Send `public_figure: true` when the user identifies one. Never assert permission for the user.
-
-`needs_licence` and `needs_review` require human input: stop polling and show the Factory review link
-`https://faceninja.net/factory#/heads/HEAD_ID`. Reviews usually take 1–2 business days. Credits remain held; staff rejection
-or the 14-day deadline returns them. A self claim, representative claim or false-positive appeal still requires staff.
-The API workflow and upload format are at https://faceninja.net/docs/#likeness-review. Never put documents or personal
-details in logs.
+Every head goes through automatic checks before it is built: a usable face, one person, the same person in all the
+photos, sharpness and colour, and an automatic public-figure screen. No head waits for a person. A head this screen
+does not clear fails with `public_figure` or `likeness_unverified` (exit 6), and the head goes back to your balance at once; the
+table above says what to tell the user. FaceNinja does not make heads of public figures: if the user says the photos show one, do
+not make the head. Impersonation, deceptive fakes of real people, sexual content of real people, harassment and
+political deception are not allowed. Never assert permission for the user. After a report of misuse FaceNinja deletes
+the head and can close the account.

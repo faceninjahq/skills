@@ -9,7 +9,7 @@ run a shell command) to make MetaHuman heads with [FaceNinja](https://faceninja.
 | `SKILL.md` | The instructions the agent reads (open Agent Skills format). |
 | `scripts/faceninja.py` | The command-line client. Python 3.9+, standard library only; works on its own too. |
 | `reference/api.md` | Short API notes the agent reads when it needs more than the script. |
-| `LICENSE` | MIT. The skill and script are free to use, change and share; making heads needs a FaceNinja account and credits. |
+| `LICENSE` | MIT. The skill and script are free to use, change and share; making heads needs a FaceNinja account and heads on its balance. |
 
 ## Install
 
@@ -65,8 +65,9 @@ agents (limits, recommended formats, maintenance windows).
 
 ## Money and safety
 
-- A head costs 1,500 credits (USD 15). Failed heads are refunded; downloads are free. The skill tells you the cost and
-  your balance before it spends, and stops to ask before any batch of more than 5 heads (`--yes`).
+- A head costs one head from your balance (USD 15). A failed head goes back to your balance; downloads are free. The
+  skill tells you the cost ("1 head ($15)") and your balance ("4.25 heads") before it spends, and stops to ask before
+  any batch of more than 5 heads (`--yes`).
 - Signing in creates an API key named after the agent and computer ("Claude Code on my-laptop"). It is stored in
   `~/.config/faceninja/credentials.json` (`%APPDATA%\FaceNinja\credentials.json` on Windows) readable by you only, and
   is never printed. Revoke it in Factory → API keys or with `faceninja.py logout`.
@@ -74,3 +75,6 @@ agents (limits, recommended formats, maintenance windows).
 - Only photos of yourself or of adults who gave you their informed consent; you are responsible for that and for how you
   use the heads. Before the first head the script asks you once, on each computer, to confirm it (`faceninja.py attest`).
   See https://faceninja.net/legal/content-policy.
+
+The FaceNinja Creator Kit is included with your first purchase. A purchased account can download it from
+https://faceninja.net/creators.

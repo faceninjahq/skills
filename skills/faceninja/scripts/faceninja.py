@@ -4,7 +4,7 @@
 Standard library only, Python 3.9+, Linux, macOS and Windows (`python faceninja.py ...`).
 
   faceninja.py login [--no-wait]           sign in: approve a code in the browser, a new API key is saved
-  faceninja.py whoami | balance            who is signed in, credits left (balance: and auto-reload)
+  faceninja.py whoami | balance            who is signed in, heads left (balance: and auto-reload)
   faceninja.py make PHOTO... [--name N] [--formats glb,zip] [--out DIR] [--no-wait] [--max-wait S]
   faceninja.py make --scan PHOTO... [--focal-length auto|MM] [--texture pbr|raw] [--no-cleanup] ...
                                            a scan (beta): 2 to 15 photos of one session
@@ -30,7 +30,7 @@ The API key comes from FACENINJA_API_KEY, else from the credentials file `login`
 (~/.config/faceninja/credentials.json, %APPDATA%\\FaceNinja\\credentials.json on Windows). Keys are never printed.
 
 Exit codes: 0 ok, 1 error, 2 bad usage, 3 needs the user's confirmation (--yes, or `attest`), 4 not signed in or sign-in refused,
-5 not enough credits, 6 the head failed (credits returned), 75 still running or still waiting (run the command again).
+5 not enough heads on the balance, 6 the head failed (it goes back to your balance), 75 still running or still waiting (run the command again).
 """
 import argparse
 import calendar
@@ -53,12 +53,20 @@ import uuid
 import webbrowser
 from pathlib import Path
 
-__version__ = "1.4.5"   # 1.4.5: make --scan: a scan (beta) from 2 to 15 photos of one session; prints the capture check of a
+__version__ = "1.4.11"  # 1.4.10: docs only: the scan shooting advice follows the capture check (about 20 to 30 degrees to
+                        #         each side at least; about 9 photos within 60 degrees of the front measure best)
+                        # 1.4.9: where auto-reload is not offered (Link), balance says so and names the one-click top-up
+                        # 1.4.8: balance and costs are printed in heads ("4.25 heads", "1 head ($15)"), from the `heads` field of
+                        #        /v1/account (older servers: credits / prices.head); the JSON keeps `credits` and adds `heads`
+                        # 1.4.7: automatic checks: hints for the refusals public_figure and likeness_unverified; neutral
+                        #        wording for a head that waits on its Factory page; the balance without a dollar value
+                        # 1.4.6: docs only: the scan capture check's new issue code `glasses` (major; take them off and shoot again)
+                        # 1.4.5: make --scan: a scan (beta) from 2 to 15 photos of one session; prints the capture check of a
                         #        scan head (a scan from one video follows the server's switch, prices.scan_video)
                         # 1.4.4: the removed head kind is gone from the script; old options answer one short error
                         # 1.4.2: MIT licence (LICENSE file in the package; installers and updates carry it); help and docs cover
                         #        heads from your own photos only
-                        # 1.4.1: refreshed photo review instructions and links; stop example polling loops on review holds.
+                        # 1.4.1: refreshed photo-head instructions and links; example polling loops stop on a status that needs the user.
                         # 1.4.0: says "test mode" on the test environment (sandbox.faceninja.net); `samples` lists without signing in
                         # 1.3.0: the user's attestation for the photos, asked once per computer and sent with every head; `samples` (the
                         #        free sample heads); heads take 10 to 20 minutes (hints, waiting text), hints for greyscale and blurry photos;
@@ -140,8 +148,48 @@ def num(n):
     return "{:,}".format(int(n or 0))
 
 
-def usd(credits, per_usd=100):
-    return "${:,.2f}".format((credits or 0) / float(per_usd or 100))
+def usd(amount):
+    return "${:,.2f}".format(amount or 0)
+
+
+def usd_short(amount):
+    """$15 for a whole number of dollars, else $14.50."""
+    amount = float(amount or 0)
+    return "${:,.0f}".format(amount) if amount == int(amount) else "${:,.2f}".format(amount)
+
+
+def _clean(h):
+    return int(h) if h == int(h) else h
+
+
+def heads_of(units, per_head=1500):
+    """A balance in heads: the internal units (`credits`) / `prices.head`, cut toward zero at two decimals, so it never
+    overstates (6,375 -> 4.25, 1 -> 0, -7,500 -> -5). The server's `heads` field is the same number; this is for servers without it."""
+    per = int(per_head) if per_head and per_head > 0 else 1500
+    c = int(units or 0)
+    cents = abs(c) * 100 // per
+    return _clean(-cents / 100.0 if c < 0 else cents / 100.0)
+
+
+def heads_text(h):
+    """'4.25 heads', '1 head', '0 heads' (English plural rules; a plain hyphen for a minus, for Windows consoles)."""
+    h = float(h or 0)
+    n = "{:,.2f}".format(abs(h)).rstrip("0").rstrip(".")
+    return "{}{} {}".format("-" if h < 0 else "", n, "head" if abs(h) == 1 else "heads")
+
+
+def _number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def balance_heads(acct, per_head):
+    """The spendable balance in heads: the response's `heads`, else `credits` / `prices.head`."""
+    return _clean(acct["heads"]) if _number(acct.get("heads")) else heads_of(acct.get("credits"), per_head)
+
+
+def held_heads(acct, per_head):
+    """The heads held by heads still being built: the response's `held_heads`, else `held_credits` / `prices.head`."""
+    return _clean(acct["held_heads"]) if _number(acct.get("held_heads")) else heads_of(acct.get("held_credits"), per_head)
 
 
 def key_prefix(key):
@@ -465,8 +513,14 @@ def video_scans_open(api):
 
 
 def head_price(acct):
+    """(internal units one head uses, its price in US dollars). One head is one head from the balance; the units only
+    convert a balance into heads for servers that do not send `heads`."""
     p = acct.get("prices") or {}
-    return int(p.get("head") or 1500), int(p.get("credits_per_usd") or 100)
+    credits = int(p.get("head") or 1500)
+    dollars = p.get("price_per_head")
+    if not isinstance(dollars, (int, float)) or isinstance(dollars, bool) or dollars <= 0:
+        dollars = credits / float(p.get("credits_per_usd") or 100)   # a server without price_per_head
+    return credits, float(dollars)
 
 
 # ---- login / whoami / balance / logout ------------------------------------------------------------------------------
@@ -481,7 +535,7 @@ def cmd_login(args, out):
     if key and source != "FACENINJA_API_KEY" and not args.force:
         try:
             a = account(Api(args.base, key, out))
-            return out.result({"ok": True, "status": "signed_in", "email": a.get("email"), "key_prefix": key_prefix(key), "credits": a.get("credits")},
+            return out.result({"ok": True, "status": "signed_in", "email": a.get("email"), "key_prefix": key_prefix(key), "credits": a.get("credits"), "heads": balance_heads(a, head_price(a)[0])},
                               "Already signed in to {} as {} (key {}). Use --force to sign in again.".format(args.base, a.get("email"), key_prefix(key)))
         except FNError as e:
             if e.exit_code != EXIT_AUTH:
@@ -552,11 +606,12 @@ def cmd_login(args, out):
 def cmd_whoami(args, out):
     api = api_for(args, out)
     a = account(api)
-    price, per = head_price(a)
+    price, _ = head_price(a)
     out.result({"ok": True, "email": a.get("email"), "account_id": a.get("id"), "key_prefix": key_prefix(api.key), "key_source": api.key_source,
-                "base_url": args.base, "credits": a.get("credits"), "held_credits": a.get("held_credits"), "head_price": price},
-               "Signed in to {} as {}\nKey {} from {}\nCredits: {} ({} heads at {} credits each)".format(
-                   args.base, a.get("email"), key_prefix(api.key), api.key_source, num(a.get("credits")), (a.get("credits") or 0) // price, num(price)))
+                "base_url": args.base, "heads": balance_heads(a, price), "held_heads": held_heads(a, price), "credits": a.get("credits"),
+                "held_credits": a.get("held_credits"), "head_price": price},
+               "Signed in to {} as {}\nKey {} from {}\nBalance: {}".format(
+                   args.base, a.get("email"), key_prefix(api.key), api.key_source, heads_text(balance_heads(a, price))))
 
 
 def auto_reload(api):
@@ -570,33 +625,40 @@ def auto_reload(api):
         raise
 
 
-def auto_reload_line(r, per):
+def auto_reload_line(r, per_head=1500):
     if not r:
         return None, ""
     on = bool(r.get("enabled"))
-    info = {"enabled": on, "state": r.get("state"), "threshold_credits": r.get("threshold_credits"), "amount_usd": r.get("amount"),
-            "credits_per_reload": (r.get("credits") or 0) + (r.get("bonus_credits") or 0), "reloads_this_month": (r.get("this_month") or {}).get("reloads"),
+    per_reload = (r.get("credits") or 0) + (r.get("bonus_credits") or 0)
+    info = {"enabled": on, "state": r.get("state"), "threshold_heads": heads_of(r.get("threshold_credits"), per_head), "heads_per_reload": heads_of(per_reload, per_head),
+            "threshold_credits": r.get("threshold_credits"), "amount_usd": r.get("amount"),
+            "credits_per_reload": per_reload, "reloads_this_month": (r.get("this_month") or {}).get("reloads"),
             "max_reloads_per_month": r.get("max_reloads_per_month"), "max_usd_per_month": r.get("max_usd_per_month")}
+    if not on and r.get("available") is False:
+        # 1.4.9: heads sold through Link have no auto-reload; a low balance gets a one-click top-up the account holder confirms
+        return info, ("\nAuto-reload: not offered. When the balance runs low, Factory > Billing offers a one-click top-up,"
+                      " which the account holder confirms on the payment page.")
     if not on:
         why = {"declined": " (turned off after a declined payment)", "agreement_canceled": " (the payment method was removed)"}.get(r.get("off_reason") or "", "")
         return info, "\nAuto-reload: off{}. The account holder can turn it on in Factory > Billing.".format(why)
     cap = " Monthly limit reached until {}.".format(((r.get("this_month") or {}).get("resets_at") or "")[:10]) if r.get("state") == "cap_reached" else ""
-    return info, ("\nAuto-reload: on. Below {} credits it buys ${} ({} credits); {} of {} top-ups used this month.{}\n"
+    return info, ("\nAuto-reload: on. Below {} it buys {} for ${}; {} of {} top-ups used this month.{}\n"
                   "A head the balance cannot pay waits for the top-up (stage waiting_for_payment).").format(
-        num(r.get("threshold_credits")), r.get("amount"), num(info["credits_per_reload"]), info["reloads_this_month"] or 0, r.get("max_reloads_per_month"), cap)
+        heads_text(info["threshold_heads"]), heads_text(info["heads_per_reload"]), r.get("amount"), info["reloads_this_month"] or 0, r.get("max_reloads_per_month"), cap)
 
 
 def cmd_balance(args, out):
     api = api_for(args, out)
     a = account(api)
-    price, per = head_price(a)
+    price, head_usd = head_price(a)
     c = int(a.get("credits") or 0)
-    ar, ar_text = auto_reload_line(auto_reload(api), per)
-    out.result({"ok": True, "credits": c, "held_credits": a.get("held_credits"), "head_price": price, "head_price_usd": price / per,
-                "heads_affordable": c // price, "buy_url": args.base + "/factory#/billing", "auto_reload": ar},
-               "{} credits ({}): enough for {} head(s). A head costs {} credits ({}).{}{}\nBuy credits: {}/factory#/billing".format(
-                   num(c), usd(c, per), c // price, num(price), usd(price, per),
-                   "\n{} credits are held by heads in progress.".format(num(a.get("held_credits"))) if a.get("held_credits") else "", ar_text, args.base))
+    bal, held = balance_heads(a, price), held_heads(a, price)
+    ar, ar_text = auto_reload_line(auto_reload(api), price)
+    out.result({"ok": True, "heads": bal, "held_heads": held, "credits": c, "held_credits": a.get("held_credits"), "head_price": price,
+                "head_price_usd": head_usd, "heads_affordable": max(0, c) // price, "buy_url": args.base + "/factory#/billing", "auto_reload": ar},
+               "{} on your balance: enough for {}. A head costs {} ({}).{}{}\nBuy heads: {}/factory#/billing".format(
+                   heads_text(bal), heads_text(max(0, c) // price), heads_text(1), usd_short(head_usd),
+                   "\nHeld by heads in progress: {}.".format(heads_text(held)) if (a.get("held_credits") or held) else "", ar_text, args.base))
 
 
 def cmd_logout(args, out):
@@ -918,7 +980,7 @@ def create_head(api, out, photos, name, public_figure=False, scan=None, video=No
         e.hint = e.hint or (scan_hint(e.code, api.base, video=bool(video)) if scan else None)
         if e.code == "insufficient_credits":
             e.exit_code = EXIT_CREDITS
-            e.hint = "Buy credits at {}/factory#/billing".format(api.base)
+            e.hint = "Buy heads at {}/factory#/billing".format(api.base)
         elif e.code == "terms_not_accepted":
             e.exit_code = EXIT_CONFIRM
             e.hint = "The user accepts the terms once at {}/factory (one checkbox), then run this again.".format(api.base)
@@ -959,9 +1021,10 @@ def wait_head(api, out, head_id, max_wait=0):
             out.say("  {}  {}".format(time.strftime("%H:%M:%S"), d))
             last = d
         if h.get("status") in ("needs_licence", "needs_review"):
-            raise FNError("Head {} is in staff review; credits are held, not charged.".format(head_id),
+            # not sent while the server checks heads automatically; the token and exit code stay for clients that branch on them
+            raise FNError("Head {} is waiting on its page in Factory and is not being built; nothing is taken from your balance.".format(head_id),
                           code="licence_review_required", exit_code=EXIT_PENDING,
-                          hint="Open {}/factory#/heads/{} to name the person, declare rights and submit evidence. Usually 1–2 business days. Never assert permission on the user's behalf.".format(api.base, head_id),
+                          hint="Open {}/factory#/heads/{} to see what it needs. Running this command again does not change it. Never assert permission on the user's behalf.".format(api.base, head_id),
                           data={"head": h})
         if h.get("status") in FINAL:
             return h
@@ -1023,11 +1086,15 @@ def head_failure(h, base):
         "blurry_photo": "A photo is heavily blurred: send a sharp one.",
         "face_too_small": "The face in a photo is too small: send the original, full-size photo.",
         "content_rejected": "The photo was refused by the content check (people under 18, nudity, or not a real photo).",
+        "public_figure": "FaceNinja does not make heads of public figures. Use photos of yourself, or of an adult who agreed.",
+        "likeness_unverified": "The automatic check could not clear these photos. Try other photos of the same person: recent, sharp, one face clearly visible.",
     }.get(code) or (scan is not None and (scan_hint(code, base, video=scan.get("source") == "video" or bool(scan.get("video")))
                                           or "How to shoot a scan: {}{}".format(base, SCAN_TIPS))) or "See the photo guide: {}/guidelines".format(base)
-    credits = (h.get("credits") or {}).get("state")
+    held = (h.get("credits") or {}).get("state")
+    said = (err.get("message") or "").lower()
     msg = "Head {} {}: {}{}".format(h.get("id"), h.get("status"), err.get("message") or code,
-                                   " Credits returned." if credits == "released" and "returned" not in (err.get("message") or "") else "")
+                                   " The head went back to your balance." if held == "released"
+                                   and not any(w in said for w in ("returned", "back to your balance", "not charged", "nothing was charged", "refunded")) else "")
     return FNError(msg, code=code, hint=hint, exit_code=EXIT_FAILED, data=dict({"head": h}, **({"scan": scan} if scan is not None else {})))
 
 
@@ -1097,13 +1164,13 @@ def download_files(api, out, head_id, formats, out_dir, arkit=None):
 
 def quote(api, out, count):
     a = account(api)
-    price, per = head_price(a)
+    price, head_usd = head_price(a)
     credits = int(a.get("credits") or 0)
     total = price * count
-    out.say("Cost: {} head(s) x {} credits = {} credits ({}). Balance: {} credits ({}).".format(
-        count, num(price), num(total), usd(total, per), num(credits), usd(credits, per)))
-    return {"heads": count, "credits_per_head": price, "total_credits": total, "total_usd": total / per, "balance": credits,
-            "balance_after": credits - total, "sufficient": credits >= total}
+    bal = balance_heads(a, price)
+    out.say("Cost: {} ({}). Balance: {}.".format(heads_text(count), usd_short(head_usd * count), heads_text(bal)))
+    return {"heads": count, "total_usd": head_usd * count, "balance_heads": bal, "balance_after_heads": heads_of(credits - total, price),
+            "credits_per_head": price, "total_credits": total, "balance": credits, "balance_after": credits - total, "sufficient": credits >= total}
 
 
 def cmd_make(args, out):
@@ -1148,16 +1215,16 @@ def cmd_make(args, out):
             extra = {"scan_options": scan, "video": str(video) if video else None} if scan else {}
             return out.result(dict(ok=True, dry_run=True, quote=q, photos=[str(p) for p in photos], name=name, formats=formats, **extra),
                               "Dry run: nothing uploaded or spent." + ("" if q["sufficient"] else
-                              "\nThe balance is too low: a real run would stop with exit 5. Buy credits at {}/factory#/billing".format(args.base)))
+                              "\nThe balance is too low: a real run would stop with exit 5. Buy heads at {}/factory#/billing".format(args.base)))
         if not q["sufficient"]:
-            raise FNError("Not enough credits: a head costs {} credits, the balance is {}.".format(num(q["credits_per_head"]), num(q["balance"])),
-                          code="insufficient_credits", exit_code=EXIT_CREDITS, hint="Buy credits at {}/factory#/billing".format(args.base))
+            raise FNError("Not enough heads: a head costs 1 head, the balance is {}.".format(heads_text(q["balance_heads"])),
+                          code="insufficient_credits", exit_code=EXIT_CREDITS, hint="Buy heads at {}/factory#/billing".format(args.base))
         require_attestation(api, out)
         head = create_head(api, out, photos, name, args.public_figure, scan, video)
         state["heads"][fp] = dict({"id": head["id"], "name": name, "photos": [str(p) for p in files], "created_at": head.get("created_at")},
                                   **({"scan": True} if scan else {}))
         save_state(out_dir, state)
-        out.say("Created head {} ({}). {} credits held.".format(head["id"], head_line(head), num(q["credits_per_head"])))
+        out.say("Created head {} ({}). {} held from your balance.".format(head["id"], head_line(head), heads_text(1)))
     result = {"ok": True, "id": head["id"], "name": name, "status": head.get("status"), "quote": q, "out": str(out_dir)}
     if not args.wait:
         if head.get("scan") is not None:
@@ -1177,7 +1244,7 @@ def cmd_make(args, out):
         if e.exit_code in (EXIT_ERROR, EXIT_AUTH) and "id" not in (e.data or {}):
             # the head exists and is paid: an error from here on (network, server, key) must not read like "nothing happened"
             e.data = dict(e.data or {}, id=head["id"])
-            e.hint = "{}{}Head {} exists and its credits are held or spent. Run the same command again: it resumes this head and charges nothing twice.".format(
+            e.hint = "{}{}Head {} exists and its head is held or spent. Run the same command again: it resumes this head and charges nothing twice.".format(
                 e.hint or "", " " if e.hint else "", head["id"])
         raise
     result.update(status="completed", files=saved, skipped=skipped)
@@ -1211,7 +1278,7 @@ def cmd_download(args, out):
 
 
 def cmd_samples(args, out):
-    """The free sample heads (no credits): list them (no sign-in needed), or download one (or all) with --download ID|all."""
+    """The free sample heads (nothing is taken from the balance): list them (no sign-in needed), or download one (or all) with --download ID|all."""
     api = api_for(args, out, need_key=bool(args.download))
     _, page, _ = api.call("GET", "/v1/samples", auth=bool(api.key))
     rows = page.get("data") or []
@@ -1224,7 +1291,7 @@ def cmd_samples(args, out):
         res = {"ok": True, "samples": rows, "license": lic, "limits": limits}
         if not api.key:
             res["signed_in"] = False
-        return out.result(res, ("\n".join(lines) if lines else "No samples yet.") + "\nFree, no credits. {} Licence: {}".format(left, lic.get("url")))
+        return out.result(res, ("\n".join(lines) if lines else "No samples yet.") + "\nFree, nothing is taken from your balance. {} Licence: {}".format(left, lic.get("url")))
     wanted = rows if args.download == "all" else [s for s in rows if s["id"] == args.download or s.get("code") == args.download]
     if not wanted:
         raise FNError("No sample {}.".format(args.download), code="not_found", exit_code=EXIT_USAGE, hint="List them: python faceninja.py samples")
@@ -1242,7 +1309,7 @@ def cmd_samples(args, out):
             out.say("  saved {} ({:.1f} MB)".format(dest, n / 1e6))
             saved.append({"sample": s["id"], "format": f["kind"], "path": str(dest), "bytes": n, "sha256": sha})
     out.result({"ok": True, "files": saved, "license": lic},
-               "Saved {} sample file(s) to {}. Free, no credits. Licence: {}".format(len(saved), Path(args.out).expanduser().resolve(), lic.get("url")))
+               "Saved {} sample file(s) to {}. Free, nothing is taken from your balance. Licence: {}".format(len(saved), Path(args.out).expanduser().resolve(), lic.get("url")))
 
 
 def cmd_list(args, out):
@@ -1317,14 +1384,15 @@ def cmd_batch(args, out):
     q = quote(api, out, len(new))
     if args.dry_run:
         return out.result({"ok": True, "dry_run": True, "quote": q, "plan": plan}, "Dry run: nothing uploaded or spent." + ("" if q["sufficient"] else
-                          "\nThe balance is too low: a real run would stop with exit 5. Buy credits at {}/factory#/billing".format(args.base)))
+                          "\nThe balance is too low: a real run would stop with exit 5. Buy heads at {}/factory#/billing".format(args.base)))
     if len(new) > confirm_above(args.base) and not args.yes:
-        raise FNError("This batch creates {} heads for {} credits ({}). Ask the user to confirm, then run again with --yes.".format(
-            len(new), num(q["total_credits"]), "${:,.2f}".format(q["total_usd"])), code="confirmation_required", exit_code=EXIT_CONFIRM,
+        raise FNError("This batch creates {} for {}. Ask the user to confirm, then run again with --yes.".format(
+            heads_text(len(new)), usd_short(q["total_usd"])), code="confirmation_required", exit_code=EXIT_CONFIRM,
             data={"quote": q})
     if not q["sufficient"]:
-        raise FNError("Not enough credits for {} heads: {} needed, {} available.".format(len(new), num(q["total_credits"]), num(q["balance"])),
-                      code="insufficient_credits", exit_code=EXIT_CREDITS, hint="Buy credits at {}/factory#/billing, or make fewer heads.".format(args.base))
+        raise FNError("Not enough heads for {}: {} needed, {} on your balance.".format(
+            heads_text(len(new)), heads_text(len(new)), heads_text(q["balance_heads"])),
+                      code="insufficient_credits", exit_code=EXIT_CREDITS, hint="Buy heads at {}/factory#/billing, or make fewer heads.".format(args.base))
     if new:
         require_attestation(api, out)
     for p in new:
@@ -1927,7 +1995,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_login)
 
     sub.add_parser("whoami", parents=[common], help="who is signed in").set_defaults(fn=cmd_whoami)
-    sub.add_parser("balance", parents=[common], help="credits left and what a head costs").set_defaults(fn=cmd_balance)
+    sub.add_parser("balance", parents=[common], help="heads left and what a head costs").set_defaults(fn=cmd_balance)
 
     def head_opts(p):
         p.add_argument("--formats", default="glb,zip", help="what to download: glb,fbx,obj,stl,ply,zip (MetaHuman ZIP) or all (default glb,zip)")
@@ -1947,7 +2015,7 @@ def main(argv=None):
     s = sub.add_parser("make", parents=[common], help=make_help,
                        description="Make heads from your photos: 1 to {} photos of the same person make one head. With --scan (beta): 3D "
                                    "{}How to shoot a scan: https://faceninja.net{}".format(MAX_PHOTOS, make_scan.format(MAX_PHOTOS), SCAN_TIPS))
-    s.add_argument("--public-figure", action="store_true", help="declare that the uploaded photos depict a public figure; staff verification is required")
+    s.add_argument("--public-figure", action="store_true", help=argparse.SUPPRESS)   # kept for old scripts: FaceNinja refuses such a head
     s.add_argument("photos", nargs="*", metavar="PHOTO", help="photos of one person (JPEG, PNG, WebP, HEIC, AVIF); with --scan " + SCAN_WHAT)
     s.add_argument("--name", help="a name for the head (default: the first photo's file name)")
     s.add_argument("--new", action="store_true", help="make a new head even if these photos already made one in --out")
@@ -1983,7 +2051,7 @@ def main(argv=None):
     head_opts(s)
     s.set_defaults(fn=cmd_batch)
 
-    s = sub.add_parser("samples", parents=[common], help="the free sample heads: list them, or --download ID|all (no credits)")
+    s = sub.add_parser("samples", parents=[common], help="the free sample heads: list them, or --download ID|all (free)")
     s.add_argument("--download", metavar="ID", help="a sample id or code, or all")
     s.add_argument("--formats", default="glb,fbx,zip")
     s.add_argument("--out", default="faceninja-samples")

@@ -12,31 +12,32 @@ POST /v1/photos?filename=me.jpg   body = the image bytes, Content-Type: image/jp
 POST /v1/heads                    {"photo_ids": ["ph_..."], "name": "Ana",
                                    "attestation": {"rights_and_consent": true, "adult": true}}   -> 202 {"id": "hd_...", "status": "queued"}
                                   header Idempotency-Key: <uuid>  (a retry returns the same head, no second charge)
-GET  /v1/heads/{id}?wait=60       holds up to 60 s; loop until status is completed | failed | deleted;
-                                  stop on needs_review | needs_licence and send the user to
-                                  https://faceninja.net/factory#/heads/{id} (staff review)
+GET  /v1/heads/{id}?wait=60       holds up to 60 s; loop while status is queued | processing; then it is
+                                  completed | failed | deleted (stop on any other status too, and send the
+                                  user to https://faceninja.net/factory#/heads/{id})
 POST /v1/heads/{id}/files         {"format": "glb"}  -> {"url", "filename", "bytes", "sha256"}; the url works for 60 s
 GET  <url>                        download, without the API key
 ```
 
-Free sample heads (no credits, any account): `GET /v1/samples` lists them with each file's `bytes` and `sha256` (no key
+Free sample heads (nothing is taken from your balance, any account): `GET /v1/samples` lists them with each file's `bytes` and `sha256` (no key
 needed to list); `GET /v1/samples/{id}/files/{glb|fbx|metahuman_zip}` returns a link that works for 5 minutes (`?redirect=1`
 for a 302) and needs an account. 30 sample files a day per account (`429 sample_limit`). Licence: /samples/LICENSE.txt.
 
-Test mode: base URL `https://sandbox.faceninja.net`, the same API with Paddle's test cards (4242 4242 4242 4242, any future
+Test mode: base URL `https://sandbox.faceninja.net`, the same API with Stripe's test cards (4242 4242 4242 4242, any future
 expiry, any security code) and no real heads: each head gets a sample head's files after about a minute (`test_build` in the
 head; a first photo named `fail-<code>.jpg` fails with that code). Every answer has `FaceNinja-Test-Mode: true` and
 `"test_mode": true`. Accounts and keys are separate from production and deleted 30 days after sign-up. Details:
 https://faceninja.net/docs/#test-mode
 
 Statuses: `queued` (waiting in line; `queue.position`, `queue.eta_s`) → `processing` (`progress` 0–100; `stage` and `message`
-for display: `preparing`, `building`, `finishing`) → `completed` or `failed` (`error.code`, `error.message`; the credits are
-returned). `DELETE /v1/heads/{id}` before it finishes also returns the credits.
+for display: `preparing`, `building`, `finishing`) → `completed` or `failed` (`error.code`, `error.message`; the head goes back
+to your balance). `DELETE /v1/heads/{id}` before it finishes also returns the head to your balance.
 
-Holds that need a person: `needs_review` (every head made from uploaded photos, before 3D work) and `needs_licence` (a
-likely public figure), both with stage `licence_review` and a `review` object (`required`: `staff` or `licence`,
-`expires_at`). Review usually takes 1–2 business days, then the head goes back to `queued` and builds in 10–20 minutes.
-`?wait` returns at once on a hold and no webhook fires: stop polling and send the user to the Factory link.
+Automatic checks: every head goes through them before it is built (a usable face, one person, the same person in all
+the photos, sharpness and colour, and an automatic public-figure screen). A head that passes is built straight away, in
+10–20 minutes; one that does not is refused automatically: `failed` with `public_figure` (the photos may show a public
+figure; FaceNinja does not make heads of public figures) or `likeness_unverified` (the check could not clear the photos;
+try other photos), and the head goes back to your balance at once. No head waits for a person.
 
 Formats for `files`: `glb`, `fbx` (both with `arkit: true|false`), `obj`, `stl`, `ply`, `metahuman_zip`. Optional download
 options: `texture` (jpg|png|none), `normal_map` (opengl|directx), `texture_size` (4k|2k|1k), `cornea`, `scale` (standard life size | measured); a new
@@ -50,7 +51,8 @@ array shows each format as `ready`, `preparing`, `on_request` or `expired`.
 ## Scan (beta): 3D reconstruction from several photos
 
 `"options": {"scan_reconstruction": true}` (or `scan_reconstruction` at the top level) builds the head from **2 to 15
-photos** of one session. How to shoot: https://faceninja.net/photo-tips#scan. Same price.
+photos** of one session. How to shoot: https://faceninja.net/photo-tips#scan (at least the front and about 20 to 30
+degrees to each side; about 9 photos, 15 degrees apart and within 60 degrees of the front, measure best). Same price.
 
 Options of a scan: `focal_length` (`"auto"`, the default; or a 35 mm-equivalent focal length in mm, 1 to 2000; or
 `{photo: mm}`, keyed by photo id, file name or 1-based position), `texture` (`pbr`, the default: evenly lit skin with
@@ -65,7 +67,7 @@ issues only; `poor`: a major issue, the head is built but a retake will be clear
 `coverage` (`photos`, `photos_used`, `turn_span_deg`, `turn_one_side_deg`, `turn_other_side_deg`, `nod_span_deg`),
 `perspective` (`focal_length_35mm`, `distance_per_face_width`). Issue codes: `missing_side`, `too_little_turn`,
 `long_lens_flat`, `few_photos`, `blur`, `lighting_change`, `low_resolution`, `expression_change`, `few_matches`,
-`photo_not_used`, `inconsistent_photo`; a newer server may add others.
+`photo_not_used`, `inconsistent_photo`, `glasses`; a newer server may add others.
 
 ## Attestation and terms (required)
 
@@ -80,15 +82,20 @@ terms gets `403 terms_not_accepted`: the user accepts them once in Factory (http
 
 ## Money
 
-`GET /v1/account` → `credits`, `held_credits`, `prices.head` (1500), `prices.credits_per_usd` (100). A head's price is held
-when it is created, kept when it completes, returned when it fails. `POST /v1/heads?dry_run=true` validates and quotes
-without creating anything. `402 insufficient_credits` means nothing was created. Credits are bought in Factory only,
-from launch day; until launch, sign-up on faceninja.net is by invitation (support@faceninja.net).
+`GET /v1/account` → `heads` (the balance in heads, e.g. 4.25), `held_heads` (heads held by heads still being built),
+`credits` and `held_credits` (the same two numbers in the API's internal units, 1,500 to a head), `prices.head` (1500, the
+units one head uses), `prices.price_per_head` (15), `prices.packs`. A head costs one head from your balance (USD 15). It is
+held when the head is created, kept when it completes, and goes back to your balance when it fails. In a head,
+`credits` is `{cost, state}`: the cost in internal units (1500 for one head) and `held`, `captured` or `released`.
+`POST /v1/heads?dry_run=true` validates and quotes without creating anything. `402 insufficient_credits` means the balance
+has fewer heads than the request needs, and nothing was created. Heads are bought in Factory only, in packs of 1, 5 or 20,
+from launch day; until launch, sign-up on faceninja.net is by invitation (support@faceninja.net). Tell the user heads and
+dollars, never the internal units.
 
 ## Errors and limits
 
 `{"error": {"code", "message", "field"?, "hint"?, "request_id"}}`; branch on `code`. A failed head's `error.code` is `no_face`,
-`multiple_people`, `not_same_person`, `unreadable_photo`, `greyscale_photo`, `blurry_photo`, `face_too_small`, `content_rejected`, `build_failed` or `timeout`; a scan also `too_few_views` (fewer than 2 usable photos), `too_many_photos`, `reconstruction_failed` or `inconsistent_capture`; after a review hold also `licence_rejected` (staff could not verify permission), `review_expired` (14 days passed) or `licence_withdrawn` (the evidence was deleted before delivery). A `503 busy` on create means nothing was made or charged: try again in an hour. 600 requests a minute per account,
+`multiple_people`, `not_same_person`, `unreadable_photo`, `greyscale_photo`, `blurry_photo`, `face_too_small`, `content_rejected`, `public_figure`, `likeness_unverified`, `build_failed` or `timeout`; a scan also `too_few_views` (fewer than 2 usable photos), `too_many_photos`, `reconstruction_failed` or `inconsistent_capture`. A `503 busy` on create means nothing was made or charged: try again in an hour. 600 requests a minute per account,
 30 head creations a minute, 20 file links a minute per head; `429` carries `Retry-After`. Photos: JPEG, PNG, WebP,
 HEIC/HEIF, AVIF, 1 KB to 25 MiB, 1 to 15 per head, one person, unused photos expire after 24 h; a scan takes 2 to 15
 photos (section Scan).
@@ -140,7 +147,6 @@ expires after 10 minutes.
 | `GET` | `/v1/heads/{id}` | Read a head, optionally waiting |
 | `DELETE` | `/v1/heads/{id}` | Delete a head |
 | `DELETE` | `/v1/heads/{id}/photos` | Delete a head's photos now |
-| `DELETE` | `/v1/heads/{id}/improvement` | Withdraw a head's opt-in for improvement |
 | `POST` | `/v1/heads/{id}/redownload` | Download a head again after its files expired |
 | `GET` | `/v1/heads/{id}/events` | Follow a head (Server-Sent Events) |
 | `GET` | `/v1/heads/{id}/files/{kind}` | Get a download link |
@@ -156,4 +162,3 @@ expires after 10 minutes.
 | `DELETE` | `/v1/keys/current` | Revoke the key that sends this request |
 <!-- endpoints:end -->
 
-Staff review can interrupt the workflow: `needs_licence` or `needs_review` requires input, with credits held. Stop polling and follow https://faceninja.net/docs/#likeness-review.

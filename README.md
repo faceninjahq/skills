@@ -88,8 +88,9 @@ you once on each computer to confirm this. No minors, and no public figures with
 
 ## VTubers: the Creator Kit
 
-The free [FaceNinja Creator Kit](https://faceninja.net/creators?utm_source=github&utm_medium=referral&utm_campaign=skill_repo)
-is an Unreal project that turns your own head into a VTuber-style avatar with voice, lip sync and OBS.
+The [FaceNinja Creator Kit](https://faceninja.net/creators?utm_source=github&utm_medium=referral&utm_campaign=skill_repo)
+is an Unreal project that turns your own head into a VTuber-style avatar with voice, lip sync and OBS. It is included
+with your first purchase.
 
 ## Links
 
