@@ -10,8 +10,8 @@ What you get for each head:
 - **4K skin** textures
 - **GLB, FBX or a MetaHuman ZIP** for Unreal Engine (OBJ, STL and PLY on request)
 
-The skill is free and MIT-licensed. Making heads is a paid service: each head costs FaceNinja credits, and there are no
-free credits. The skill always tells you the cost and your balance before it spends anything, and it asks before any
+The skill is free and MIT-licensed. Making heads is a paid service: each head costs one head from your balance (USD 15),
+and a head that fails goes back to your balance. The skill always tells you the cost and your balance before it spends anything, and it asks before any
 batch of more than five heads.
 
 ## Install
@@ -83,7 +83,7 @@ Set `FACENINJA_NO_AUTOUPDATE=1` to turn this off; `faceninja.py update --rollbac
 ## Consent and safety
 
 Only use photos of yourself, or of adults who gave you their informed consent. Before the first head, the client asks
-you once on each computer to confirm this. No minors, and no public figures without their written permission. See the
+you once on each computer to confirm this. No minors, and no public figures: FaceNinja does not make heads of public figures. See the
 [Content & Likeness Policy](https://faceninja.net/legal/content-policy).
 
 ## VTubers: the Creator Kit

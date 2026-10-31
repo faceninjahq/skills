@@ -9,7 +9,7 @@
     {
       "name": "faceninja",
       "source": "./",
-      "description": "Turn a photo into a finished MetaHuman head from your AI agent: 52 ARKit blendshapes, 4K skin, GLB, FBX or a MetaHuman ZIP. Paid FaceNinja credits.",
+      "description": "Turn a photo into a finished MetaHuman head from your AI agent: 52 ARKit blendshapes, 4K skin, GLB, FBX or a MetaHuman ZIP. Paid service: USD 15 per head.",
       "license": "MIT",
       "homepage": "https://faceninja.net/agents?utm_source=github&utm_medium=referral&utm_campaign=skill_repo",
       "repository": "https://github.com/faceninjahq/skills",
